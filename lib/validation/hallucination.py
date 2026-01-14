@@ -108,7 +108,7 @@ class HallucinationDetector:
 
     def __init__(
         self,
-        model: str = "gemini-2.0-flash",
+        model: Optional[str] = None,
         searcher: Optional[HybridSearcher] = None,
         n_evidence: int = 5,
     ):
@@ -116,11 +116,11 @@ class HallucinationDetector:
         Initialize detector.
 
         Args:
-            model: LLM model for extraction and verification
+            model: LLM model for extraction and verification (defaults to config.GEMINI_MODEL)
             searcher: Search engine for evidence retrieval
             n_evidence: Number of evidence passages to retrieve per claim
         """
-        self.model = model
+        self.model = model or config.GEMINI_MODEL
         self.searcher = searcher or HybridSearcher()
         self.n_evidence = n_evidence
         self._client = None

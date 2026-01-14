@@ -333,7 +333,7 @@ class IngestPipeline:
                                 concept.name,
                                 concept.type,
                                 concept.confidence,
-                                "gemini-2.0-flash",
+                                config.GEMINI_MODEL,
                                 "v3.0",
                             ),
                         )

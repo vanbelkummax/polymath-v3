@@ -54,7 +54,7 @@ class JITRetriever:
         self,
         searcher: Optional[HybridSearcher] = None,
         synthesize: bool = True,
-        model: str = "gemini-2.0-flash",
+        model: Optional[str] = None,
     ):
         """
         Initialize JIT retriever.
@@ -62,11 +62,11 @@ class JITRetriever:
         Args:
             searcher: HybridSearcher instance (creates new if None)
             synthesize: Whether to generate synthesis
-            model: LLM model for synthesis
+            model: LLM model for synthesis (defaults to config.GEMINI_MODEL)
         """
         self.searcher = searcher or HybridSearcher()
         self.synthesize = synthesize
-        self.model = model
+        self.model = model or config.GEMINI_MODEL
         self._client = None
 
     @property

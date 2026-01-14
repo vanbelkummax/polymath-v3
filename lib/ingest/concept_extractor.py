@@ -52,17 +52,17 @@ class ConceptExtractor:
 
     def __init__(
         self,
-        model: str = "gemini-2.0-flash",
+        model: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
         """
         Initialize extractor.
 
         Args:
-            model: Gemini model to use
+            model: Gemini model to use (defaults to config.GEMINI_MODEL)
             api_key: API key (uses config if not provided)
         """
-        self.model = model
+        self.model = model or config.GEMINI_MODEL
         self.api_key = api_key or config.GEMINI_API_KEY
         self._client = None
 
