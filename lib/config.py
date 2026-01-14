@@ -5,14 +5,19 @@ All configuration values should be imported from this module.
 Supports environment variable overrides for containerization.
 """
 
+import logging
 import os
+import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass, field
+
 from dotenv import load_dotenv
 
 # Load .env file if it exists
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def _find_project_root() -> Path:
@@ -101,6 +106,24 @@ class Config:
     @property
     def GEMINI_API_KEY(self) -> Optional[str]:
         return os.environ.get("GEMINI_API_KEY")
+
+    # ==========================================================================
+    # LLM Models (for synthesis, extraction, verification)
+    # ==========================================================================
+    @property
+    def GEMINI_MODEL(self) -> str:
+        """Default Gemini model for synthesis and extraction."""
+        return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+
+    @property
+    def GEMINI_MODEL_FAST(self) -> str:
+        """Fast Gemini model for high-volume operations."""
+        return os.environ.get("GEMINI_MODEL_FAST", "gemini-2.0-flash")
+
+    @property
+    def GEMINI_MODEL_QUALITY(self) -> str:
+        """Higher quality Gemini model for critical operations."""
+        return os.environ.get("GEMINI_MODEL_QUALITY", "gemini-2.0-flash")
 
     # ==========================================================================
     # External APIs
@@ -198,6 +221,32 @@ class Config:
 config = Config()
 
 
+# ==========================================================================
+# Proactive Validation at Import Time
+# ==========================================================================
+def _validate_on_import():
+    """Validate critical configuration at import time."""
+    # Warn if Neo4j password is not set
+    if not config.NEO4J_PASSWORD:
+        warnings.warn(
+            "NEO4J_PASSWORD is not set. Neo4j operations will fail. "
+            "Set NEO4J_PASSWORD in your .env file or environment.",
+            UserWarning,
+            stacklevel=2,
+        )
+        logger.warning("NEO4J_PASSWORD not configured - Neo4j operations will fail")
+
+    # Warn if Gemini API key is not set
+    if not config.GEMINI_API_KEY:
+        logger.warning(
+            "GEMINI_API_KEY not configured - concept extraction and synthesis disabled"
+        )
+
+
+# Run validation when module is imported
+_validate_on_import()
+
+
 # Convenience exports
 POSTGRES_DSN = config.POSTGRES_DSN
 NEO4J_URI = config.NEO4J_URI
@@ -207,5 +256,6 @@ EMBEDDING_MODEL = config.EMBEDDING_MODEL
 EMBEDDING_DIM = config.EMBEDDING_DIM
 RERANKER_MODEL = config.RERANKER_MODEL
 GEMINI_API_KEY = config.GEMINI_API_KEY
+GEMINI_MODEL = config.GEMINI_MODEL
 GCP_PROJECT_ID = config.GCP_PROJECT_ID
 GCP_BUCKET = config.GCP_BUCKET

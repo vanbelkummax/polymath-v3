@@ -13,26 +13,9 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from lib.config import config
+from lib.prompts import CONCEPT_EXTRACTION_PROMPT, format_prompt
 
 logger = logging.getLogger(__name__)
-
-# Concept extraction prompt
-CONCEPT_PROMPT = """Extract key scientific concepts from this research text. Return ONLY valid JSON:
-{"methods": [], "problems": [], "domains": [], "datasets": [], "metrics": [], "entities": []}
-
-Rules:
-- methods: techniques, algorithms, tools (e.g., "spatial transcriptomics", "gradient descent")
-- problems: challenges being addressed (e.g., "cell type deconvolution", "batch effects")
-- domains: research fields (e.g., "computational pathology", "drug discovery")
-- datasets: specific datasets mentioned (e.g., "Visium HD", "10x Xenium", "TCGA")
-- metrics: evaluation metrics (e.g., "PCC", "SSIM", "AUC", "R²")
-- entities: genes, proteins, diseases, cell types (e.g., "TP53", "EGFR", "T-cell")
-- Be specific, not generic (e.g., "transformer attention" not just "neural network")
-- Only include explicitly mentioned concepts
-- Return 5-15 concepts maximum
-
-Text:
-{text}"""
 
 
 @dataclass
@@ -124,7 +107,7 @@ class ConceptExtractor:
         if len(text) > max_length:
             text = text[:max_length] + "..."
 
-        prompt = CONCEPT_PROMPT.format(text=text)
+        prompt = format_prompt(CONCEPT_EXTRACTION_PROMPT, text=text)
 
         try:
             response = self.client.models.generate_content(

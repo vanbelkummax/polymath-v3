@@ -13,6 +13,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lib.config import config
+from lib.prompts import (
+    JIT_SYNTHESIS_PROMPT,
+    JIT_CLAIM_VERIFICATION_PROMPT,
+    JIT_FOLLOWUP_QUERY_PROMPT,
+    format_prompt,
+)
 from lib.search.hybrid_search import HybridSearcher, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -160,22 +166,8 @@ class JITRetriever:
 
         context = "\n".join(context_parts)
 
-        # Synthesis prompt
-        prompt = f"""Based on the following research passages, answer this question:
-
-QUESTION: {query}
-
-CONTEXT:
-{context}
-
-INSTRUCTIONS:
-- Answer based ONLY on the provided context
-- Cite sources using [1], [2], etc.
-- If the context doesn't contain enough information, say so
-- Be concise but thorough
-- Include specific details, numbers, and methods when available
-
-ANSWER:"""
+        # Use centralized prompt
+        prompt = format_prompt(JIT_SYNTHESIS_PROMPT, query=query, context=context)
 
         try:
             response = self.client.models.generate_content(
@@ -239,23 +231,8 @@ ANSWER:"""
 
         context = "\n\n".join(context_parts)
 
-        # Verification prompt
-        prompt = f"""Evaluate this claim against the provided evidence:
-
-CLAIM: {claim}
-
-EVIDENCE:
-{context}
-
-INSTRUCTIONS:
-- Determine if the claim is SUPPORTED, CONTRADICTED, or INSUFFICIENT EVIDENCE
-- Cite specific passages using [1], [2], etc.
-- Explain your reasoning briefly
-
-OUTPUT FORMAT:
-VERDICT: [SUPPORTED/CONTRADICTED/INSUFFICIENT]
-CONFIDENCE: [0.0-1.0]
-REASONING: [Your explanation with citations]"""
+        # Use centralized prompt
+        prompt = format_prompt(JIT_CLAIM_VERIFICATION_PROMPT, claim=claim, context=context)
 
         try:
             response = self.client.models.generate_content(
@@ -369,14 +346,13 @@ REASONING: [Your explanation with citations]"""
 
         context = "\n".join([p.passage_text[:500] for p in passages[:3]])
 
-        prompt = f"""Original question: {original_query}
-Current search: {current_query}
-
-Retrieved context:
-{context}
-
-Based on this context, what follow-up question would help answer the original question better?
-Return ONLY the follow-up question, nothing else."""
+        # Use centralized prompt
+        prompt = format_prompt(
+            JIT_FOLLOWUP_QUERY_PROMPT,
+            original_query=original_query,
+            current_query=current_query,
+            context=context,
+        )
 
         try:
             response = self.client.models.generate_content(

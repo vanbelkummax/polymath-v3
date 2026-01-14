@@ -354,38 +354,73 @@ class IngestPipeline:
         progress_callback=None,
     ) -> BatchIngestResult:
         """
-        Ingest multiple PDFs.
+        Ingest multiple PDFs in parallel.
 
         Args:
             pdf_paths: List of PDF file paths
-            max_workers: Number of parallel workers (not yet implemented)
+            max_workers: Number of parallel workers
             progress_callback: Optional callback(current, total, result)
 
         Returns:
             BatchIngestResult with aggregated stats
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+
         start_time = time.time()
         results = []
         succeeded = 0
         failed = 0
+        processed = 0
+
+        # Thread-safe counter for progress tracking
+        lock = threading.Lock()
 
         # Track batch in database
         self._start_batch_tracking(len(pdf_paths))
 
-        for i, pdf_path in enumerate(pdf_paths):
-            result = self.ingest_pdf(pdf_path)
-            results.append(result)
+        def process_pdf(pdf_path: Path) -> IngestResult:
+            """Process a single PDF (called from thread pool)."""
+            return self.ingest_pdf(pdf_path)
 
-            if result.success:
-                succeeded += 1
-            else:
-                failed += 1
+        # Use ThreadPoolExecutor for parallel processing
+        # ThreadPool is appropriate here because work is I/O bound
+        # (PDF parsing, API calls, database writes)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all jobs
+            future_to_path = {
+                executor.submit(process_pdf, path): path
+                for path in pdf_paths
+            }
 
-            # Update batch progress
-            self._update_batch_progress(i + 1, succeeded, failed)
+            # Process results as they complete
+            for future in as_completed(future_to_path):
+                pdf_path = future_to_path[future]
 
-            if progress_callback:
-                progress_callback(i + 1, len(pdf_paths), result)
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"Worker exception for {pdf_path}: {e}")
+                    result = IngestResult(
+                        success=False,
+                        error=f"Worker exception: {e}",
+                    )
+
+                # Thread-safe updates
+                with lock:
+                    results.append(result)
+                    processed += 1
+
+                    if result.success:
+                        succeeded += 1
+                    else:
+                        failed += 1
+
+                    # Update batch progress
+                    self._update_batch_progress(processed, succeeded, failed)
+
+                    if progress_callback:
+                        progress_callback(processed, len(pdf_paths), result)
 
         elapsed = time.time() - start_time
         self._complete_batch_tracking(succeeded, failed)

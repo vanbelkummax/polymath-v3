@@ -17,6 +17,11 @@ from enum import Enum
 from typing import Optional
 
 from lib.config import config
+from lib.prompts import (
+    HALLUCINATION_CLAIM_EXTRACTION_PROMPT,
+    HALLUCINATION_VERIFICATION_PROMPT,
+    format_prompt,
+)
 from lib.search.hybrid_search import HybridSearcher, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -196,25 +201,7 @@ class HallucinationDetector:
 
         Returns list of Claim objects.
         """
-        prompt = f"""Extract all verifiable factual claims from this text.
-Each claim should be:
-- Atomic (one fact per claim)
-- Self-contained (understandable without context)
-- Verifiable (could be checked against sources)
-
-TEXT:
-{text}
-
-OUTPUT FORMAT (one claim per line):
-CLAIM 1: [claim text]
-SOURCE: [original sentence containing this claim]
----
-CLAIM 2: [claim text]
-SOURCE: [original sentence containing this claim]
----
-...
-
-Extract all claims now:"""
+        prompt = format_prompt(HALLUCINATION_CLAIM_EXTRACTION_PROMPT, text=text)
 
         try:
             response = self.client.models.generate_content(
@@ -304,25 +291,11 @@ Extract all claims now:"""
                 evidence_text += f" ({e.year})"
             evidence_text += f"\n{e.passage_text}\n"
 
-        prompt = f"""Verify this claim against the provided evidence.
-
-CLAIM: {claim.text}
-
-EVIDENCE:
-{evidence_text}
-
-INSTRUCTIONS:
-- Determine if the claim is SUPPORTED, CONTRADICTED, or UNVERIFIABLE by the evidence
-- SUPPORTED: Evidence clearly confirms the claim
-- CONTRADICTED: Evidence clearly refutes the claim
-- UNVERIFIABLE: Evidence is insufficient or irrelevant
-
-OUTPUT FORMAT:
-VERDICT: [SUPPORTED/CONTRADICTED/UNVERIFIABLE]
-CONFIDENCE: [0.0-1.0]
-REASONING: [Brief explanation citing evidence numbers]
-
-Verify now:"""
+        prompt = format_prompt(
+            HALLUCINATION_VERIFICATION_PROMPT,
+            claim=claim.text,
+            evidence=evidence_text,
+        )
 
         try:
             response = self.client.models.generate_content(
