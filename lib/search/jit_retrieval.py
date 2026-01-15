@@ -62,11 +62,17 @@ class JITRetriever:
         Args:
             searcher: HybridSearcher instance (creates new if None)
             synthesize: Whether to generate synthesis
-            model: LLM model for synthesis (defaults to config.GEMINI_MODEL)
+            model: LLM model for synthesis (defaults to gemini-3.0-flash for 2M context)
+
+        Note:
+            Uses GEMINI_MODEL_EXPERIMENTAL (gemini-3.0-flash) by default for synthesis.
+            The 2M context window enables loading entire papers or large passage clusters.
+            Preview pricing is also cheaper than 2.5 standard ($0.15 vs $0.30 input).
         """
         self.searcher = searcher or HybridSearcher()
         self.synthesize = synthesize
-        self.model = model or config.GEMINI_MODEL
+        # Use experimental model for synthesis (2M context, cheaper preview pricing)
+        self.model = model or config.GEMINI_MODEL_EXPERIMENTAL
         self._client = None
 
     @property
@@ -92,8 +98,8 @@ class JITRetriever:
     def retrieve(
         self,
         query: str,
-        n_passages: int = 10,
-        max_context_length: int = 8000,
+        n_passages: int = 20,
+        max_context_length: int = 50000,
         rerank: bool = True,
     ) -> RetrievalResult:
         """
@@ -101,12 +107,16 @@ class JITRetriever:
 
         Args:
             query: User query
-            n_passages: Number of passages to retrieve
-            max_context_length: Max chars for synthesis context
+            n_passages: Number of passages to retrieve (default increased for 2M context)
+            max_context_length: Max chars for synthesis context (increased for gemini-3.0-flash)
             rerank: Whether to rerank results
 
         Returns:
             RetrievalResult with passages and optional synthesis
+
+        Note:
+            Defaults increased to leverage gemini-3.0-flash's 2M context window.
+            50K chars ≈ 12K tokens, well within safe limits.
         """
         # Step 1: Retrieve passages
         response = self.searcher.search(query, n=n_passages, rerank=rerank)
@@ -319,12 +329,12 @@ class JITRetriever:
                     query, current_query, response.results
                 )
 
-        # Final synthesis with all passages
+        # Final synthesis with all passages (use large context for 3.0-flash)
         synthesis = None
         confidence = 0.0
 
         if self.synthesize and self.client and all_passages:
-            synthesis, confidence = self._synthesize(query, all_passages, 12000)
+            synthesis, confidence = self._synthesize(query, all_passages, 80000)
 
         return RetrievalResult(
             query=query,

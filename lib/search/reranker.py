@@ -8,10 +8,14 @@ Supports multiple backends: sentence-transformers, Cohere, BGE-reranker.
 import logging
 from typing import Optional
 
+from functools import lru_cache
+
 from lib.config import config
-from lib.search.hybrid_search import SearchResult
 
 logger = logging.getLogger(__name__)
+
+# Forward declaration to avoid circular import
+# SearchResult is defined in hybrid_search.py which imports this module
 
 
 class Reranker:
@@ -260,3 +264,26 @@ def get_reranker(backend: str = "local") -> Reranker:
     if backend == "cohere":
         return CohereReranker()
     return Reranker()
+
+
+# =============================================================================
+# Singleton Pattern (Critical for Performance)
+# =============================================================================
+# Loading the reranker model takes 2-5 seconds. We cache the instance
+# globally to avoid reloading on every search request.
+# =============================================================================
+
+
+@lru_cache(maxsize=1)
+def get_reranker_singleton() -> Reranker:
+    """
+    Get cached reranker instance (singleton).
+
+    IMPORTANT: Use this instead of Reranker() in search paths.
+    Model loading takes 2-5 seconds - singleton avoids repeated loading.
+
+    Returns:
+        Cached Reranker instance
+    """
+    logger.info("Initializing reranker singleton (one-time cost)")
+    return Reranker(model_name=config.RERANKER_MODEL)

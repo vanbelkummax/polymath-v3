@@ -44,7 +44,7 @@ class ConceptExtractionJob:
 
     def __init__(
         self,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-2.5-flash",
         batch_size: int = 100,
     ):
         """
@@ -62,25 +62,51 @@ class ConceptExtractionJob:
         """
         Run the extraction job.
 
+        Implements proper sharding using BATCH_TASK_INDEX to ensure each worker
+        processes only its slice of the data (avoids 10x cost overrun).
+
         Args:
             input_uri: GCS URI for input JSONL
             output_uri: GCS URI for output JSONL
         """
         from google.cloud import storage
 
+        # =================================================================
+        # GCP Batch Sharding: Each worker processes only its slice
+        # =================================================================
+        task_index = int(os.environ.get("BATCH_TASK_INDEX", 0))
+        task_count = int(os.environ.get("BATCH_TASK_COUNT", 1))
+        logger.info(f"Worker {task_index + 1}/{task_count} starting")
+
         # Download input
         logger.info(f"Downloading input from {input_uri}")
         input_path = self._download_gcs(input_uri)
 
-        # Process
+        # Read all lines and calculate shard slice
+        with open(input_path, "r") as f:
+            all_lines = f.readlines()
+
+        total_records = len(all_lines)
+        chunk_size = total_records // task_count
+        start_idx = task_index * chunk_size
+        # Last worker gets any remainder
+        end_idx = start_idx + chunk_size if task_index < task_count - 1 else total_records
+
+        my_lines = all_lines[start_idx:end_idx]
+        logger.info(
+            f"Worker {task_index}: processing records {start_idx}-{end_idx} "
+            f"({len(my_lines)} of {total_records} total)"
+        )
+
+        # Process only our shard
         output_path = tempfile.mktemp(suffix=".jsonl")
         processed = 0
         failed = 0
 
-        with open(input_path, "r") as infile, open(output_path, "w") as outfile:
+        with open(output_path, "w") as outfile:
             batch = []
 
-            for line in infile:
+            for line in my_lines:
                 record = json.loads(line)
                 batch.append(record)
 
@@ -94,7 +120,7 @@ class ConceptExtractionJob:
                             failed += 1
 
                     batch = []
-                    logger.info(f"Processed {processed + failed} passages")
+                    logger.info(f"Worker {task_index}: processed {processed + failed} passages")
 
             # Process remaining
             if batch:
@@ -106,11 +132,19 @@ class ConceptExtractionJob:
                     else:
                         failed += 1
 
-        # Upload output
-        logger.info(f"Uploading output to {output_uri}")
-        self._upload_gcs(output_path, output_uri)
+        # Upload output with worker-specific suffix for parallel writes
+        # Each worker writes to a separate file to avoid overwrites
+        if task_count > 1:
+            # Split output into per-worker files: concepts_0.jsonl, concepts_1.jsonl, etc.
+            base_uri = output_uri.rsplit(".", 1)[0]
+            worker_output_uri = f"{base_uri}_{task_index}.jsonl"
+        else:
+            worker_output_uri = output_uri
 
-        logger.info(f"Completed: {processed} processed, {failed} failed")
+        logger.info(f"Uploading output to {worker_output_uri}")
+        self._upload_gcs(output_path, worker_output_uri)
+
+        logger.info(f"Worker {task_index} completed: {processed} processed, {failed} failed")
 
         # Cleanup
         os.remove(input_path)
@@ -281,7 +315,7 @@ def main():
     parser = argparse.ArgumentParser(description="Concept extraction batch job")
     parser.add_argument("--input-uri", required=True, help="GCS input URI")
     parser.add_argument("--output-uri", required=True, help="GCS output URI")
-    parser.add_argument("--model", default="gemini-2.0-flash", help="Model to use")
+    parser.add_argument("--model", default="gemini-2.5-flash", help="Model to use")
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size")
 
     args = parser.parse_args()

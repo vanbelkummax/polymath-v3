@@ -144,9 +144,9 @@ class HybridSearcher:
 
         # Step 3: Rerank if requested
         if rerank:
-            from lib.search.reranker import Reranker
+            from lib.search.reranker import get_reranker_singleton
 
-            reranker = Reranker()
+            reranker = get_reranker_singleton()
             fused = reranker.rerank(query, fused, top_k=n)
         else:
             fused = fused[:n]
