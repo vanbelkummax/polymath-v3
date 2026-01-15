@@ -32,6 +32,77 @@ server = Server("polymath-v3")
 
 
 # ============================================================================
+# Security Validation
+# ============================================================================
+
+# Keywords that indicate write operations in Cypher
+DANGEROUS_CYPHER_KEYWORDS = [
+    "DELETE", "CREATE", "SET ", "MERGE", "REMOVE", "DROP",
+    "CALL DBMS", "CALL APOC.LOAD", "CALL APOC.EXPORT",
+    "CALL APOC.PERIODIC", "ALTER", "DETACH DELETE",
+]
+
+
+def validate_cypher_read_only(query: str) -> tuple[bool, str]:
+    """
+    Validate that a Cypher query is read-only.
+
+    Returns:
+        (is_valid, error_message) - is_valid=True if query is safe
+    """
+    query_upper = query.upper()
+
+    for keyword in DANGEROUS_CYPHER_KEYWORDS:
+        if keyword in query_upper:
+            return False, f"Write operation not allowed: {keyword}"
+
+    return True, ""
+
+
+def validate_file_path(
+    path: Path,
+    allowed_extensions: list[str] = None,
+    max_size_mb: int = 500,
+) -> tuple[bool, str]:
+    """
+    Validate a file path for security.
+
+    Checks:
+    - File exists
+    - Extension is allowed
+    - File size is within limits
+
+    Returns:
+        (is_valid, error_message)
+    """
+    allowed_extensions = allowed_extensions or [".pdf"]
+
+    # Resolve to canonical path (prevents path traversal)
+    try:
+        resolved = path.resolve()
+    except (OSError, ValueError) as e:
+        return False, f"Invalid path: {e}"
+
+    # Check existence
+    if not resolved.exists():
+        return False, f"File not found: {resolved}"
+
+    # Check extension
+    if resolved.suffix.lower() not in allowed_extensions:
+        return False, f"Invalid file type: {resolved.suffix}. Allowed: {allowed_extensions}"
+
+    # Check file size
+    try:
+        size_mb = resolved.stat().st_size / (1024 * 1024)
+        if size_mb > max_size_mb:
+            return False, f"File too large: {size_mb:.1f}MB (max: {max_size_mb}MB)"
+    except OSError as e:
+        return False, f"Cannot access file: {e}"
+
+    return True, ""
+
+
+# ============================================================================
 # Tool Definitions
 # ============================================================================
 
@@ -478,11 +549,13 @@ async def handle_ingest_pdf(args: dict) -> list[TextContent]:
     pdf_path = Path(args["pdf_path"])
     extract_concepts = args.get("extract_concepts", True)
 
-    if not pdf_path.exists():
-        return [TextContent(type="text", text=f"File not found: {pdf_path}")]
+    # Security: validate file path
+    is_valid, error_msg = validate_file_path(pdf_path, allowed_extensions=[".pdf"])
+    if not is_valid:
+        return [TextContent(type="text", text=f"# Validation Error\n\n{error_msg}")]
 
     pipeline = IngestPipeline(extract_concepts=extract_concepts)
-    result = pipeline.ingest_pdf(pdf_path)
+    result = pipeline.ingest_pdf(pdf_path.resolve())
 
     if result.success:
         output = f"# Ingestion Successful\n\n"
@@ -535,6 +608,14 @@ async def handle_graph_query(args: dict) -> list[TextContent]:
 
     cypher = args["cypher"]
     params = args.get("params", {})
+
+    # Security: validate query is read-only
+    is_valid, error_msg = validate_cypher_read_only(cypher)
+    if not is_valid:
+        return [TextContent(
+            type="text",
+            text=f"# Security Error\n\n{error_msg}\n\nOnly read-only queries (MATCH, RETURN, etc.) are allowed."
+        )]
 
     driver = get_neo4j_driver()
     records, summary, _ = driver.execute_query(cypher, **params)
