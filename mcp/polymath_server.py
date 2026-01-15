@@ -199,6 +199,35 @@ Args:
             "required": ["cypher"],
         },
     ),
+    Tool(
+        name="research_deep_dive",
+        description="""Autonomously investigate a research question with multiple rounds.
+
+Performs iterative search-verify-refine cycles:
+1. Search knowledge base for initial findings
+2. Identify gaps or uncertainties
+3. Verify key claims
+4. Refine search based on findings
+5. Synthesize comprehensive answer
+
+Returns a research brief with citations, verified claims, and identified gaps.
+
+Args:
+    question: Research question to investigate
+    max_rounds: Maximum search iterations (default: 3)
+    domain: Optional domain focus for gap detection (e.g., "spatial_transcriptomics")
+    verify_claims: Whether to verify extracted claims (default: true)""",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "Research question"},
+                "max_rounds": {"type": "integer", "default": 3, "minimum": 1, "maximum": 5},
+                "domain": {"type": "string", "description": "Optional domain focus"},
+                "verify_claims": {"type": "boolean", "default": True},
+            },
+            "required": ["question"],
+        },
+    ),
 ]
 
 
@@ -234,6 +263,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return await handle_get_stats(arguments)
         elif name == "graph_query":
             return await handle_graph_query(arguments)
+        elif name == "research_deep_dive":
+            return await handle_research_deep_dive(arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -406,7 +437,7 @@ async def handle_find_gaps(args: dict) -> list[TextContent]:
         output += f"- **Problem Similarity:** {c.problem_similarity:.2f}\n"
         output += f"- **Domain Penetration:** {c.domain_penetration:.1%}\n"
         output += f"- **Novelty Score:** {nr.novelty_score:.2f}\n"
-        output += f"- **Prior Art:** {nr.pubmed_hits} PubMed, {nr.semantic_scholar_hits} S2\n"
+        output += f"- **Prior Art:** {nr.pubmed_hits} PubMed, {nr.semantic_scholar_hits} S2, {nr.openalex_hits} OpenAlex\n"
         output += f"- **Assessment:** {'NOVEL' if nr.is_novel else 'WELL-STUDIED'}\n\n"
 
     return [TextContent(type="text", text=output)]
@@ -529,6 +560,136 @@ async def handle_graph_query(args: dict) -> list[TextContent]:
 
         output += json.dumps(results, indent=2, default=str)
         output += "\n```\n"
+
+    return [TextContent(type="text", text=output)]
+
+
+async def handle_research_deep_dive(args: dict) -> list[TextContent]:
+    """
+    Handle research_deep_dive tool.
+
+    Performs iterative search-verify-refine cycles to answer a research question.
+    """
+    from lib.search.hybrid_search import HybridSearcher
+    from lib.search.jit_retrieval import JITRetriever
+    from lib.bridgemine.gap_detection import GapDetector
+    from lib.validation.hallucination import extract_claims, verify_claim
+
+    question = args["question"]
+    max_rounds = args.get("max_rounds", 3)
+    domain = args.get("domain")
+    verify_claims_flag = args.get("verify_claims", True)
+
+    # Initialize components
+    retriever = JITRetriever()
+    searcher = HybridSearcher()
+
+    # Track across rounds
+    all_passages = []
+    all_claims = []
+    verified_claims = []
+    gaps_found = []
+    round_summaries = []
+
+    current_query = question
+
+    for round_num in range(1, max_rounds + 1):
+        logger.info(f"Research round {round_num}/{max_rounds}: {current_query[:50]}...")
+
+        # Step 1: Retrieve and synthesize
+        result = retriever.retrieve(current_query, n_passages=15)
+
+        # Collect unique passages
+        seen_ids = {str(p.passage_id) for p in all_passages}
+        for p in result.passages:
+            if str(p.passage_id) not in seen_ids:
+                all_passages.append(p)
+                seen_ids.add(str(p.passage_id))
+
+        round_summary = {
+            "round": round_num,
+            "query": current_query,
+            "synthesis": result.synthesis or "No synthesis generated",
+            "sources_used": result.sources_used,
+        }
+
+        # Step 2: Extract and verify claims (if enabled)
+        if verify_claims_flag and result.synthesis:
+            claims = extract_claims(result.synthesis)
+            for claim in claims[:5]:  # Limit claims per round
+                if claim.text not in [c.text for c in all_claims]:
+                    all_claims.append(claim)
+
+                    # Verify claim
+                    verification = verify_claim(claim.text)
+                    verified_claims.append({
+                        "claim": claim.text,
+                        "status": verification.status.value,
+                        "confidence": verification.confidence,
+                    })
+
+        # Step 3: Find gaps (if domain specified)
+        if domain and round_num < max_rounds:
+            detector = GapDetector()
+            gap_result = detector.find_gaps(domain, limit=3)
+
+            for candidate in gap_result.candidates[:2]:
+                if candidate.method_name not in [g["method"] for g in gaps_found]:
+                    gaps_found.append({
+                        "method": candidate.method_name,
+                        "problem": candidate.target_problem,
+                        "similarity": candidate.problem_similarity,
+                    })
+
+        # Step 4: Refine query for next round
+        if round_num < max_rounds:
+            # Add unexplored angles to query
+            if gaps_found:
+                gap = gaps_found[-1]
+                current_query = f"{question} AND {gap['method']}"
+            elif verified_claims:
+                # Focus on uncertain claims
+                uncertain = [c for c in verified_claims if c["status"] == "unverifiable"]
+                if uncertain:
+                    current_query = f"{question} evidence for {uncertain[0]['claim'][:50]}"
+
+        round_summaries.append(round_summary)
+
+    # Build final output
+    output = f"# Research Deep Dive: {question}\n\n"
+    output += f"Completed {max_rounds} research rounds\n\n"
+
+    # Main synthesis (from final round)
+    output += "## Answer\n\n"
+    if round_summaries:
+        output += round_summaries[-1]["synthesis"] + "\n\n"
+
+    # Sources
+    output += f"## Sources ({len(all_passages)} unique passages)\n\n"
+    for i, p in enumerate(all_passages[:10]):
+        output += f"[{i+1}] {p.title}"
+        if p.year:
+            output += f" ({p.year})"
+        output += "\n"
+
+    # Verified claims
+    if verified_claims:
+        output += f"\n## Claim Verification ({len(verified_claims)} claims)\n\n"
+        for vc in verified_claims[:10]:
+            status_icon = {"supported": "✓", "contradicted": "✗", "unverifiable": "?"}
+            icon = status_icon.get(vc["status"], "?")
+            output += f"{icon} **{vc['status'].upper()}** (conf: {vc['confidence']:.2f}): {vc['claim'][:80]}...\n"
+
+    # Research gaps
+    if gaps_found:
+        output += f"\n## Identified Research Gaps\n\n"
+        for gap in gaps_found:
+            output += f"- **{gap['method']}** could address *{gap['problem']}* (similarity: {gap['similarity']:.2f})\n"
+
+    # Round-by-round summary
+    output += "\n## Research Rounds\n\n"
+    for rs in round_summaries:
+        output += f"**Round {rs['round']}:** {rs['query'][:60]}... ({rs['sources_used']} sources)\n"
 
     return [TextContent(type="text", text=output)]
 

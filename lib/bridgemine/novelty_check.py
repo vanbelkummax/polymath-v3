@@ -39,6 +39,7 @@ class NoveltyResult:
     local_hits: int = 0
     pubmed_hits: int = 0
     semantic_scholar_hits: int = 0
+    openalex_hits: int = 0
 
     # Prior art details
     prior_art: list[dict] = field(default_factory=list)
@@ -90,6 +91,12 @@ class NoveltyChecker:
         """
         Check novelty of a gap candidate.
 
+        Uses 4 sources for comprehensive novelty assessment:
+        - Local knowledge base (Postgres FTS)
+        - PubMed (biomedical literature)
+        - Semantic Scholar (broad coverage)
+        - OpenAlex (fast, comprehensive, recent focus)
+
         Args:
             candidate: GapCandidate to check
 
@@ -100,22 +107,23 @@ class NoveltyChecker:
         query = f"{candidate.method_name} {candidate.target_problem}"
         domain_query = f"{candidate.method_name} {candidate.target_domain}"
 
-        # Check all sources in parallel (conceptually)
+        # Check all sources
         local_hits = self._check_local(query)
         pubmed_hits, pubmed_papers = self._check_pubmed(domain_query)
         s2_hits, s2_papers = self._check_semantic_scholar(domain_query)
+        openalex_hits, openalex_papers = self._check_openalex(domain_query)
 
-        # Combine prior art
-        prior_art = self._merge_prior_art(pubmed_papers, s2_papers)
+        # Combine prior art from all external sources
+        prior_art = self._merge_prior_art(pubmed_papers, s2_papers, openalex_papers)
 
-        # Calculate RRF confidence
+        # Calculate RRF confidence with 4 sources
         rrf_confidence = self._calculate_rrf_confidence(
-            local_hits, pubmed_hits, s2_hits
+            local_hits, pubmed_hits, s2_hits, openalex_hits
         )
 
         # Calculate novelty score
         novelty_score = self._calculate_novelty_score(
-            local_hits, pubmed_hits, s2_hits, prior_art
+            local_hits, pubmed_hits, s2_hits, openalex_hits, prior_art
         )
 
         # Determine if novel
@@ -137,10 +145,11 @@ class NoveltyChecker:
             local_hits=local_hits,
             pubmed_hits=pubmed_hits,
             semantic_scholar_hits=s2_hits,
+            openalex_hits=openalex_hits,
             prior_art=prior_art[:20],  # Limit stored prior art
             rrf_confidence=rrf_confidence,
             reasoning=self._generate_reasoning(
-                is_novel, novelty_score, local_hits, pubmed_hits, s2_hits
+                is_novel, novelty_score, local_hits, pubmed_hits, s2_hits, openalex_hits
             ),
         )
 
@@ -257,6 +266,47 @@ class NoveltyChecker:
             logger.debug(f"Semantic Scholar check failed: {e}")
             return 0, []
 
+    def _check_openalex(self, query: str) -> tuple[int, list[dict]]:
+        """
+        Check OpenAlex for relevant works.
+
+        OpenAlex is faster and has better coverage than Semantic Scholar,
+        making it ideal for novelty assessment.
+        """
+        try:
+            url = "https://api.openalex.org/works"
+            params = {
+                "search": query,
+                "per_page": 20,
+                "mailto": config.OPENALEX_EMAIL,
+                "filter": "publication_year:>2020",  # Focus on recent work
+                "select": "id,title,publication_year,cited_by_count,doi",
+            }
+
+            with httpx.Client(timeout=15.0) as client:
+                response = client.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+            count = data.get("meta", {}).get("count", 0)
+            papers = []
+
+            for work in data.get("results", []):
+                papers.append({
+                    "openalex_id": work.get("id"),
+                    "title": work.get("title", ""),
+                    "year": work.get("publication_year"),
+                    "citations": work.get("cited_by_count", 0),
+                    "doi": work.get("doi"),
+                    "source": "openalex",
+                })
+
+            return count, papers
+
+        except Exception as e:
+            logger.debug(f"OpenAlex check failed: {e}")
+            return 0, []
+
     def _extract_year(self, pubdate: str) -> Optional[int]:
         """Extract year from PubMed pubdate string."""
         if not pubdate:
@@ -269,14 +319,19 @@ class NoveltyChecker:
             return None
 
     def _merge_prior_art(
-        self, pubmed_papers: list[dict], s2_papers: list[dict]
+        self,
+        pubmed_papers: list[dict],
+        s2_papers: list[dict],
+        openalex_papers: list[dict] = None,
     ) -> list[dict]:
         """Merge and deduplicate prior art from multiple sources."""
+        openalex_papers = openalex_papers or []
+
         # Simple merge - could be smarter with title matching
         merged = []
         seen_titles = set()
 
-        for paper in pubmed_papers + s2_papers:
+        for paper in pubmed_papers + s2_papers + openalex_papers:
             title_lower = paper.get("title", "").lower()
             if title_lower and title_lower not in seen_titles:
                 merged.append(paper)
@@ -291,12 +346,16 @@ class NoveltyChecker:
         return merged
 
     def _calculate_rrf_confidence(
-        self, local_hits: int, pubmed_hits: int, s2_hits: int
+        self,
+        local_hits: int,
+        pubmed_hits: int,
+        s2_hits: int,
+        openalex_hits: int = 0,
     ) -> float:
         """
-        Calculate RRF confidence score.
+        Calculate RRF confidence score using 4 sources.
 
-        Higher score = more existing work found.
+        Higher score = more existing work found = less novel.
         """
         # Normalize hit counts to ranks (more hits = higher rank = lower value)
         scores = []
@@ -314,6 +373,11 @@ class NoveltyChecker:
             s2_rank = 1 / (1 + s2_hits / 1000)
             scores.append(1.0 / (RRF_K + s2_rank * 100))
 
+        if openalex_hits > 0:
+            # OpenAlex typically has higher counts, normalize accordingly
+            openalex_rank = 1 / (1 + openalex_hits / 2000)
+            scores.append(1.0 / (RRF_K + openalex_rank * 100))
+
         if not scores:
             return 0.0
 
@@ -324,15 +388,16 @@ class NoveltyChecker:
         local_hits: int,
         pubmed_hits: int,
         s2_hits: int,
+        openalex_hits: int,
         prior_art: list[dict],
     ) -> float:
         """
-        Calculate novelty score (0-1).
+        Calculate novelty score (0-1) using 4 sources.
 
         Higher = more novel (less existing work).
         """
-        # Base score from hit counts
-        total_hits = local_hits + pubmed_hits + s2_hits
+        # Base score from hit counts (weight external sources more)
+        total_hits = local_hits + pubmed_hits + s2_hits + (openalex_hits * 0.5)  # OpenAlex inflated
 
         if total_hits == 0:
             base_score = 1.0
@@ -364,20 +429,21 @@ class NoveltyChecker:
         local_hits: int,
         pubmed_hits: int,
         s2_hits: int,
+        openalex_hits: int = 0,
     ) -> str:
         """Generate human-readable reasoning for novelty assessment."""
+        sources = f"{local_hits} local, {pubmed_hits} PubMed, {s2_hits} S2, {openalex_hits} OpenAlex"
+
         if is_novel:
             return (
                 f"Novel gap identified (score: {novelty_score:.2f}). "
-                f"Found {local_hits} local, {pubmed_hits} PubMed, "
-                f"{s2_hits} Semantic Scholar hits. "
+                f"Found {sources} hits. "
                 "Low existing coverage suggests opportunity."
             )
         else:
             return (
                 f"Not novel (score: {novelty_score:.2f}). "
-                f"Found {local_hits} local, {pubmed_hits} PubMed, "
-                f"{s2_hits} Semantic Scholar hits. "
+                f"Found {sources} hits. "
                 "Substantial existing work in this area."
             )
 

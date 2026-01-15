@@ -1,0 +1,5 @@
+{"query": "spatial transcriptomics deconvolution methods", "relevant_passage_ids": [], "tags": ["spatial", "deconvolution"], "notes": "Fill in passage IDs from your KB"}
+{"query": "predict gene expression from H&E images", "relevant_passage_ids": [], "tags": ["img2st", "prediction"], "notes": "Core Img2ST query"}
+{"query": "Visium HD subcellular resolution analysis", "relevant_passage_ids": [], "tags": ["visium", "spatial"], "notes": "Technology-specific query"}
+{"query": "transformer attention mechanism for histopathology", "relevant_passage_ids": [], "tags": ["ml", "pathology"], "notes": "Architecture query"}
+{"query": "cell type annotation from morphology", "relevant_passage_ids": [], "tags": ["cells", "morphology"], "notes": "Cell typing from images"}

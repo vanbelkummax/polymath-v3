@@ -133,6 +133,11 @@ class Config:
         return os.environ.get("OPENALEX_EMAIL", "polymath@example.com")
 
     @property
+    def S2_API_KEY(self) -> Optional[str]:
+        """Semantic Scholar API key for higher rate limits."""
+        return os.environ.get("S2_API_KEY")
+
+    @property
     def BRAVE_API_KEY(self) -> Optional[str]:
         return os.environ.get("BRAVE_API_KEY")
 
