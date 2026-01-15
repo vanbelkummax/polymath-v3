@@ -16,6 +16,7 @@ from typing import Optional
 from lib.config import config
 from lib.db.postgres import get_pg_pool
 from lib.embeddings.bge_m3 import get_embedder
+from lib.telemetry import TelemetryLogger, is_telemetry_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -127,38 +128,72 @@ class HybridSearcher:
 
         start_time = time.time()
 
-        # Step 1: Get candidates from each source
-        vector_results = self._vector_search(query, k=vector_k, filters=filters)
-        fts_results = self._fts_search(query, k=fts_k, filters=filters)
+        # Initialize telemetry (only logs if POLYMATH_TELEMETRY=1)
+        with TelemetryLogger() as tl:
+            tl.set_query(query, n_requested=n)
+            if filters:
+                tl.set_filters(filters)
 
-        graph_results = []
-        if self.use_neo4j and self.graph_weight > 0:
-            graph_results = self._graph_search(query, k=vector_k, filters=filters)
+            # Step 1: Get candidates from each source
+            with tl.time("vector"):
+                vector_results = self._vector_search(query, k=vector_k, filters=filters)
+            tl.add_vector_results([
+                {"passage_id": r.passage_id, "score": r.score}
+                for r in vector_results
+            ])
 
-        # Step 2: Fuse with RRF
-        fused = self._rrf_fusion(
-            vector_results=vector_results,
-            fts_results=fts_results,
-            graph_results=graph_results,
-        )
+            with tl.time("fts"):
+                fts_results = self._fts_search(query, k=fts_k, filters=filters)
+            tl.add_fts_results([
+                {"passage_id": r.passage_id, "score": r.score}
+                for r in fts_results
+            ])
 
-        # Step 3: Rerank if requested
-        if rerank:
-            from lib.search.reranker import get_reranker_singleton
+            graph_results = []
+            if self.use_neo4j and self.graph_weight > 0:
+                with tl.time("graph"):
+                    graph_results = self._graph_search(query, k=vector_k, filters=filters)
+                tl.add_graph_results([
+                    {"passage_id": r.passage_id, "score": r.score}
+                    for r in graph_results
+                ])
 
-            reranker = get_reranker_singleton()
-            fused = reranker.rerank(query, fused, top_k=n)
-        else:
-            fused = fused[:n]
+            # Step 2: Fuse with RRF
+            with tl.time("fusion"):
+                fused = self._rrf_fusion(
+                    vector_results=vector_results,
+                    fts_results=fts_results,
+                    graph_results=graph_results,
+                )
+            tl.add_fused_results([
+                {"passage_id": r.passage_id, "score": r.score}
+                for r in fused
+            ])
 
-        elapsed = (time.time() - start_time) * 1000
+            # Step 3: Rerank if requested
+            if rerank:
+                from lib.search.reranker import get_reranker_singleton
 
-        return SearchResponse(
-            query=query,
-            results=fused,
-            total_found=len(fused),
-            search_time_ms=elapsed,
-        )
+                reranker = get_reranker_singleton()
+                with tl.time("rerank"):
+                    fused = reranker.rerank(query, fused, top_k=n)
+                tl.add_reranked_results([
+                    {"passage_id": r.passage_id, "rerank_score": r.score}
+                    for r in fused
+                ])
+            else:
+                fused = fused[:n]
+
+            elapsed = (time.time() - start_time) * 1000
+
+            response = SearchResponse(
+                query=query,
+                results=fused,
+                total_found=len(fused),
+                search_time_ms=elapsed,
+            )
+
+        return response
 
     def _vector_search(
         self, query: str, k: int = 100, filters: Optional[dict] = None

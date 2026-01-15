@@ -1,228 +1,200 @@
-# Claude Code Configuration for Polymath v3
+# Polymath v3 - Reconstruction Guide
 
-## Quick Reference
+## Quick Start
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **Code** | `/home/user/polymath-v3/` | Source of truth |
-| **Postgres** | `postgresql://polymath@localhost/polymath_v3` | Documents, passages, vectors |
-| **Neo4j** | `bolt://localhost:7687` (neo4j/polymathic2026) | Concept graph |
-| **Config** | `lib/config.py` | Centralized configuration |
-| **Env** | `.env` | Secrets (not in git) |
+```bash
+# 1. Reset database
+psql -U polymath -c "DROP DATABASE IF EXISTS polymath_v3; CREATE DATABASE polymath_v3;"
+psql -U polymath -d polymath_v3 -f schema/postgres/001_core.sql
+psql -U polymath -d polymath_v3 -f schema/postgres/002_concepts.sql
+psql -U polymath -d polymath_v3 -f schema/postgres/005_soft_delete.sql
 
----
+# 2. Ingest from Zotero CSVs (prototype first)
+python scripts/ingest_from_zotero.py --csv /path/to/zotero.csv --limit 200
 
-## Architecture Overview
-
-```
-polymath-v3/
-├── lib/
-│   ├── config.py           # Centralized config
-│   ├── db/                  # Database connections
-│   │   ├── postgres.py     # pgvector + pooling
-│   │   └── neo4j.py        # Graph database
-│   ├── embeddings/         # BGE-M3 1024-dim
-│   ├── ingest/             # PDF → passages → DB
-│   │   ├── pipeline.py     # Main orchestrator
-│   │   ├── pdf_parser.py   # PyMuPDF extraction
-│   │   ├── chunking.py     # Markdown-aware splitting
-│   │   ├── metadata.py     # Zotero → CrossRef resolution
-│   │   └── concept_extractor.py  # Gemini API
-│   ├── search/             # Retrieval
-│   │   ├── hybrid_search.py  # Vector + FTS + Graph + RRF
-│   │   ├── jit_retrieval.py  # Query-time synthesis
-│   │   └── reranker.py       # Neural reranking
-│   ├── validation/         # Quality
-│   │   └── hallucination.py  # 3-stage detection
-│   └── bridgemine/         # Discovery
-│       ├── gap_detection.py   # Method-problem gaps
-│       └── novelty_check.py   # PubMed/S2 validation
-├── mcp/
-│   └── polymath_server.py  # MCP server
-├── cli/
-│   └── main.py             # Click CLI
-├── scripts/
-│   ├── reingest_archive.py
-│   ├── backfill_concepts.py
-│   └── sync_neo4j.py
-└── batch/                  # GCP Batch jobs
+# 3. Full batch via GCP
+python scripts/ingest_from_zotero.py --csv /path/to/zotero.csv --batch
 ```
 
 ---
 
-## Common Commands
+## Data Sources
 
-### Search
+| Source | Location | Count |
+|--------|----------|-------|
+| Zotero CSV 1 | `/mnt/c/Users/User/Downloads/Polymath_Full_.csv` | 3,175 |
+| Zotero CSV 2 | `/mnt/c/Users/User/Downloads/polymath2_.csv` | 1,124 |
+| PDF Storage | `/mnt/c/Users/User/Zotero/storage/` | WSL path |
 
-```bash
-# CLI search
-polymath search "spatial transcriptomics" -n 20 --rerank
+**CSV Columns**: Key, Title, Author, DOI, Abstract Note, File Attachments
 
-# Python
-from lib.search.hybrid_search import HybridSearcher
-searcher = HybridSearcher()
-response = searcher.search("query", n=20, rerank=True)
+---
+
+## Architecture
+
+```
+Zotero CSV → IngestPipeline → Postgres (pgvector) → Neo4j (concepts)
+                  ↓
+         GCP Batch API (concepts)
 ```
 
-### Ingestion
+| Component | Purpose |
+|-----------|---------|
+| `lib/ingest/pipeline.py` | PDF → chunks → embeddings → DB |
+| `lib/ingest/metadata.py` | Zotero/CrossRef resolution |
+| `lib/embeddings/bge_m3.py` | BGE-M3 1024-dim vectors |
+| `batch/concept_extraction.py` | GCP Batch for Gemini |
+| `scripts/sync_neo4j.py` | Postgres → Neo4j sync |
+
+---
+
+## GCP Batch Configuration
 
 ```bash
-# Single paper
-polymath ingest /path/to/paper.pdf
-
-# Batch
-polymath ingest-batch /path/to/pdfs/ --workers 4
-
-# Python
-from lib.ingest.pipeline import IngestPipeline
-pipeline = IngestPipeline()
-result = pipeline.ingest_pdf(Path("/path/to/paper.pdf"))
+export GCP_PROJECT_ID="fifth-branch-483806-m1"
+export GCP_BUCKET="gs://polymath-batch-jobs"
+export GEMINI_API_KEY="your-key"
 ```
 
-### Validation
-
+**Batch Concept Extraction:**
 ```bash
-# Verify claim
-polymath verify "BERT uses bidirectional attention"
+# Submit async batch job (50% cheaper)
+python batch/submit_concept_job.py --input passages.jsonl
 
-# Python
-from lib.validation.hallucination import verify_claim
-result = verify_claim("claim text")
-```
+# Check status
+python batch/submit_concept_job.py --status JOB_ID
 
-### BridgeMine
-
-```bash
-# Find gaps
-polymath gaps "spatial_transcriptomics" --check-novelty
-
-# Python
-from lib.bridgemine.gap_detection import GapDetector
-detector = GapDetector()
-result = detector.find_gaps("spatial_transcriptomics")
+# Process results
+python batch/process_batch_results.py --job JOB_ID
 ```
 
 ---
 
-## Database Schemas
+## Ingestion Commands
 
-### PostgreSQL (pgvector)
+### Prototype (local, 200 PDFs)
+```bash
+python scripts/ingest_from_zotero.py \
+  --csv '/mnt/c/Users/User/Downloads/Polymath_Full_.csv' \
+  --limit 200 \
+  --workers 4
+```
+
+### Full Batch (GCP)
+```bash
+python scripts/ingest_from_zotero.py \
+  --csv '/mnt/c/Users/User/Downloads/Polymath_Full_.csv' \
+  --batch \
+  --skip-concepts  # Extract concepts via GCP batch later
+```
+
+### Concept Backfill
+```bash
+# Export passages needing concepts
+psql -U polymath -d polymath_v3 -c "
+  SELECT passage_id, passage_text
+  FROM passages p
+  WHERE NOT EXISTS (
+    SELECT 1 FROM passage_concepts pc WHERE pc.passage_id = p.passage_id
+  )
+" -t -A -F $'\t' > missing_concepts.tsv
+
+# Submit to GCP Batch
+python batch/submit_concept_job.py --input missing_concepts.tsv
+```
+
+---
+
+## Database Schema (Essential)
 
 ```sql
--- Core tables
-documents (doc_id UUID, title, doi, pmid, arxiv_id, authors[], year, venue)
-passages (passage_id UUID, doc_id FK, passage_text, section, embedding vector(1024))
-passage_concepts (passage_id, concept_name, concept_type, confidence)
+-- Documents
+CREATE TABLE documents (
+  doc_id UUID PRIMARY KEY,
+  title TEXT NOT NULL,
+  title_hash VARCHAR(64) UNIQUE,
+  doi VARCHAR(100) UNIQUE,
+  authors TEXT[],
+  year INTEGER,
+  zotero_key VARCHAR(20)
+);
 
--- Indexes
-idx_passage_embedding USING hnsw (embedding vector_cosine_ops)
-idx_passage_search USING gin (search_vector)
+-- Passages with vectors
+CREATE TABLE passages (
+  passage_id UUID PRIMARY KEY,
+  doc_id UUID REFERENCES documents,
+  passage_text TEXT,
+  embedding vector(1024),
+  is_superseded BOOLEAN DEFAULT FALSE
+);
+
+-- Concepts
+CREATE TABLE passage_concepts (
+  passage_id UUID REFERENCES passages,
+  concept_name VARCHAR(200),
+  concept_type VARCHAR(50),
+  confidence REAL
+);
 ```
 
-### Neo4j
-
-```cypher
-// Node types
-(:Paper {doc_id, title, year, doi})
-(:Passage {passage_id, doc_id, section})
-(:METHOD {name})
-(:PROBLEM {name})
-(:DOMAIN {name})
-
-// Relationships
-(p:Passage)-[:FROM_PAPER]->(paper:Paper)
-(p:Passage)-[:MENTIONS {confidence}]->(c:METHOD)
-(m1:METHOD)-[:SIMILAR_TO {score}]-(m2:METHOD)
-```
-
 ---
 
-## Metadata Resolution Priority
-
-1. **Zotero CSV** (confidence > 0.95) - Fast, high coverage
-2. **pdf2doi** - Extract DOI from PDF binary
-3. **CrossRef API** - Authoritative for DOIs
-4. **arXiv API** - For preprints
-5. **Zotero relaxed** (confidence > 0.80)
-6. **Filename parsing** - Last resort
-
----
-
-## Key Design Decisions
-
-### pgvector over ChromaDB
-- Single source of truth (ACID)
-- No sync issues
-- Better SQL integration
-- HNSW performs comparably
-
-### Zotero-first metadata
-- 600K+ entries from local library
-- Faster than API calls
-- Higher accuracy for known papers
-
-### JIT Retrieval (GAM paper)
-- No pre-computed summaries
-- Fresh synthesis per query
-- Better for evolving questions
-
-### 3-Stage Hallucination (HaluMem paper)
-- Extract: Pull verifiable claims
-- Update: Contextualize with evidence
-- QA: Verify each claim
-
----
-
-## MCP Tools
-
-| Tool | Purpose |
-|------|---------|
-| `semantic_search` | Hybrid search with RRF |
-| `retrieve_and_synthesize` | JIT retrieval + answer |
-| `verify_claim` | Check against KB |
-| `detect_hallucinations` | Full hallucination report |
-| `find_research_gaps` | BridgeMine discovery |
-| `find_similar_passages` | Vector similarity |
-| `ingest_pdf` | Add to knowledge base |
-| `get_stats` | System statistics |
-| `graph_query` | Raw Cypher execution |
-
----
-
-## Environment Variables
-
-Required in `.env`:
+## Validation
 
 ```bash
-POSTGRES_DSN=postgresql://polymath:password@localhost/polymath_v3
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=polymathic2026
-GEMINI_API_KEY=your_key
-OPENALEX_EMAIL=your@email.com
-ZOTERO_CSV_PATH=/path/to/zotero.csv
+# Check counts
+psql -U polymath -d polymath_v3 -c "
+  SELECT 'documents' as tbl, count(*) FROM documents
+  UNION ALL
+  SELECT 'passages', count(*) FROM passages
+  UNION ALL
+  SELECT 'concepts', count(*) FROM passage_concepts;
+"
+
+# Test search
+python -c "
+from lib.search.hybrid_search import HybridSearcher
+s = HybridSearcher()
+r = s.search('spatial transcriptomics', n=5)
+for x in r.results: print(f'{x.score:.3f} {x.title[:50]}')
+"
+
+# Run eval
+python scripts/run_evaluation.py --eval-set data/eval_sets/core.jsonl
+```
+
+---
+
+## Neo4j Sync
+
+```bash
+# Full sync after ingestion
+python scripts/sync_neo4j.py --full
+
+# Incremental (new docs only)
+python scripts/sync_neo4j.py --incremental
 ```
 
 ---
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| pgvector not found | `CREATE EXTENSION vector;` |
-| Neo4j connection refused | Check Docker: `docker ps` |
-| Gemini rate limit | Increase delay in backfill |
-| Embedding OOM | Reduce batch size |
-| Zotero match wrong | Check title normalization |
+| Issue | Fix |
+|-------|-----|
+| PDF not found | Check WSL path: `/mnt/c/Users/User/Zotero/storage/` |
+| OOM on embeddings | Reduce batch size: `BATCH_SIZE=50` |
+| GCP auth fail | `gcloud auth application-default login` |
+| Neo4j connection | `docker start neo4j` |
 
 ---
 
-## Performance Targets
+## Environment
 
-| Operation | Target |
-|-----------|--------|
-| Hybrid search | < 500ms |
-| Single PDF ingest | < 30s |
-| Batch ingest | 500 PDFs/hour |
-| Concept extraction | 1000/hour (Gemini) |
-| Neo4j sync | 10K nodes/minute |
+```bash
+# Required in .env
+POSTGRES_DSN=dbname=polymath_v3 user=polymath host=/var/run/postgresql
+NEO4J_URI=bolt://localhost:7687
+NEO4J_PASSWORD=polymathic2026
+GEMINI_API_KEY=your-key
+GCP_PROJECT_ID=fifth-branch-483806-m1
+```

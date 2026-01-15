@@ -109,3 +109,89 @@ class TestTelemetry:
             tl.add_vector_results([{"passage_id": "test", "score": 0.9}])
 
         # Should complete without error
+
+
+class TestBaselineRegression:
+    """Tests for retrieval metrics regression against baseline."""
+
+    @pytest.fixture
+    def baseline(self):
+        """Load baseline metrics if available."""
+        from pathlib import Path
+        from lib.config import config
+        import json
+
+        baseline_path = Path(config.PROJECT_ROOT) / "data" / "eval_sets" / "baseline.json"
+        if not baseline_path.exists():
+            pytest.skip("No baseline established - run scripts/run_baseline.py first")
+
+        with open(baseline_path) as f:
+            return json.load(f)
+
+    def test_recall_above_baseline(self, baseline, searcher):
+        """Ensure recall@10 doesn't regress from baseline."""
+        from lib.evaluation import load_eval_set, evaluate_retrieval
+        from lib.evaluation.metrics import aggregate_metrics
+        from pathlib import Path
+        from lib.config import config
+
+        eval_set_path = Path(config.PROJECT_ROOT) / "data" / "eval_sets" / "core.jsonl"
+        if not eval_set_path.exists():
+            pytest.skip("No eval set found")
+
+        queries = load_eval_set(eval_set_path)
+        if not queries:
+            pytest.skip("Empty eval set")
+
+        results = []
+        for eq in queries:
+            response = searcher.search(eq.query, n=20, rerank=False)
+            retrieved_ids = [r.passage_id for r in response.results]
+            result = evaluate_retrieval(
+                query=eq.query,
+                retrieved_ids=retrieved_ids,
+                relevant_ids=eq.relevant_set,
+            )
+            results.append(result)
+
+        current = aggregate_metrics(results)
+        baseline_recall = baseline["metrics"]["recall_at_10"]
+
+        # Allow 5% regression margin
+        threshold = baseline_recall * 0.95
+        assert current["mean_recall_at_10"] >= threshold, \
+            f"Recall@10 regressed: {current['mean_recall_at_10']:.4f} < {threshold:.4f} (baseline: {baseline_recall:.4f})"
+
+    def test_mrr_above_baseline(self, baseline, searcher):
+        """Ensure MRR doesn't regress from baseline."""
+        from lib.evaluation import load_eval_set, evaluate_retrieval
+        from lib.evaluation.metrics import aggregate_metrics
+        from pathlib import Path
+        from lib.config import config
+
+        eval_set_path = Path(config.PROJECT_ROOT) / "data" / "eval_sets" / "core.jsonl"
+        if not eval_set_path.exists():
+            pytest.skip("No eval set found")
+
+        queries = load_eval_set(eval_set_path)
+        if not queries:
+            pytest.skip("Empty eval set")
+
+        results = []
+        for eq in queries:
+            response = searcher.search(eq.query, n=20, rerank=False)
+            retrieved_ids = [r.passage_id for r in response.results]
+            result = evaluate_retrieval(
+                query=eq.query,
+                retrieved_ids=retrieved_ids,
+                relevant_ids=eq.relevant_set,
+            )
+            results.append(result)
+
+        current = aggregate_metrics(results)
+        baseline_mrr = baseline["metrics"]["mrr"]
+
+        # Allow 5% regression margin
+        threshold = baseline_mrr * 0.95
+        assert current["mean_mrr"] >= threshold, \
+            f"MRR regressed: {current['mean_mrr']:.4f} < {threshold:.4f} (baseline: {baseline_mrr:.4f})"
