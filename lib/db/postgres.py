@@ -25,12 +25,13 @@ def get_pg_pool(min_size: int = None, max_size: int = None) -> ConnectionPool:
     """
     Get or create the global connection pool.
 
-    Pool size is automatically configured based on NUM_WORKERS to prevent
-    thread starvation during parallel ingestion.
+    Pool size is configured via PG_POOL_MIN and PG_POOL_MAX environment
+    variables, decoupled from worker threads to prevent resource contention
+    when multiple clients (MCP server, CLI, batch jobs) run concurrently.
 
     Args:
-        min_size: Minimum connections (default: min(2, NUM_WORKERS))
-        max_size: Maximum connections (default: NUM_WORKERS + 2)
+        min_size: Override minimum connections (default: PG_POOL_MIN)
+        max_size: Override maximum connections (default: PG_POOL_MAX)
 
     Returns:
         ConnectionPool instance
@@ -38,12 +39,11 @@ def get_pg_pool(min_size: int = None, max_size: int = None) -> ConnectionPool:
     global _pool
 
     if _pool is None:
-        # Auto-configure pool size based on worker count
-        num_workers = config.NUM_WORKERS
-        min_size = min_size if min_size is not None else min(2, num_workers)
-        max_size = max_size if max_size is not None else num_workers + 2
+        # Use config values, decoupled from NUM_WORKERS
+        min_size = min_size if min_size is not None else config.PG_POOL_MIN
+        max_size = max_size if max_size is not None else config.PG_POOL_MAX
 
-        logger.info(f"Creating Postgres connection pool (min={min_size}, max={max_size}, workers={num_workers})")
+        logger.info(f"Creating Postgres connection pool (min={min_size}, max={max_size})")
         _pool = ConnectionPool(
             config.POSTGRES_DSN,
             min_size=min_size,

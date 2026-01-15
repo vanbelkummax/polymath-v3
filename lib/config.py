@@ -109,21 +109,38 @@ class Config:
 
     # ==========================================================================
     # LLM Models (for synthesis, extraction, verification)
+    #
+    # Model Tiers (as of 2026):
+    # ┌─────────────────────┬──────────────────┬───────────────────┬─────────────────────────────┐
+    # │ Tier                │ Model            │ Cost (per 1M)     │ Use Case                    │
+    # ├─────────────────────┼──────────────────┼───────────────────┼─────────────────────────────┤
+    # │ FAST (batch)        │ gemini-2.5-flash │ $0.15 in / $0.60  │ Concept extraction (batch)  │
+    # │ DEFAULT             │ gemini-2.5-flash │ $0.30 in / $1.25  │ JIT synthesis, claims       │
+    # │ QUALITY             │ gemini-2.5-pro   │ $1.25 in / $5.00  │ Complex reasoning           │
+    # │ EXPERIMENTAL        │ gemini-3.0-flash │ Preview pricing   │ 2M context, agentic         │
+    # └─────────────────────┴──────────────────┴───────────────────┴─────────────────────────────┘
+    #
+    # Use BATCH (-50% cost) for high-volume operations like concept extraction
     # ==========================================================================
     @property
     def GEMINI_MODEL(self) -> str:
         """Default Gemini model for synthesis and extraction."""
-        return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+        return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
     @property
     def GEMINI_MODEL_FAST(self) -> str:
-        """Fast Gemini model for high-volume operations."""
-        return os.environ.get("GEMINI_MODEL_FAST", "gemini-2.0-flash")
+        """Fast/cheap Gemini model for batch operations."""
+        return os.environ.get("GEMINI_MODEL_FAST", "gemini-2.5-flash")
 
     @property
     def GEMINI_MODEL_QUALITY(self) -> str:
-        """Higher quality Gemini model for critical operations."""
-        return os.environ.get("GEMINI_MODEL_QUALITY", "gemini-2.0-flash")
+        """Higher quality Gemini model for critical reasoning."""
+        return os.environ.get("GEMINI_MODEL_QUALITY", "gemini-2.5-pro")
+
+    @property
+    def GEMINI_MODEL_EXPERIMENTAL(self) -> str:
+        """Experimental model with 2M context and agentic capabilities."""
+        return os.environ.get("GEMINI_MODEL_EXPERIMENTAL", "gemini-3.0-flash")
 
     # ==========================================================================
     # External APIs
@@ -155,6 +172,19 @@ class Config:
     @property
     def LOG_LEVEL(self) -> str:
         return os.environ.get("LOG_LEVEL", "INFO")
+
+    # ==========================================================================
+    # Database Pooling (decoupled from worker threads)
+    # ==========================================================================
+    @property
+    def PG_POOL_MIN(self) -> int:
+        """Minimum Postgres connections. Set independently of workers."""
+        return int(os.environ.get("PG_POOL_MIN", "2"))
+
+    @property
+    def PG_POOL_MAX(self) -> int:
+        """Maximum Postgres connections. Should exceed total concurrent clients."""
+        return int(os.environ.get("PG_POOL_MAX", "20"))
 
     # ==========================================================================
     # Rate Limits (requests per second)

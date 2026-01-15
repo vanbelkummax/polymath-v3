@@ -69,6 +69,10 @@ class HallucinationReport:
     contradicted_count: int = 0
     unverifiable_count: int = 0
 
+    # Citation density metrics (for "soft" evidence gating)
+    citation_density: float = 0.0  # Citations per sentence
+    uncited_sentences: list[str] = field(default_factory=list)
+
     @property
     def hallucination_score(self) -> float:
         """
@@ -88,9 +92,28 @@ class HallucinationReport:
         return min(1.0, score)
 
     @property
+    def evidence_coverage(self) -> float:
+        """
+        Calculate evidence coverage (0-1).
+
+        Higher = more claims supported by evidence.
+        This is the "soft" evidence gate metric.
+        """
+        total = len(self.results)
+        if total == 0:
+            return 1.0  # No claims = nothing to verify = OK
+
+        return self.supported_count / total
+
+    @property
     def is_reliable(self) -> bool:
         """Check if text is reliable (low hallucination)."""
         return self.hallucination_score < 0.3
+
+    @property
+    def needs_more_citations(self) -> bool:
+        """Check if text needs more citations (soft flag, not hard failure)."""
+        return self.citation_density < 0.3 or self.evidence_coverage < 0.5
 
 
 class HallucinationDetector:
@@ -186,6 +209,9 @@ class HallucinationDetector:
             else:
                 unverifiable += 1
 
+        # Calculate citation density
+        citation_density, uncited = self._calculate_citation_density(text)
+
         return HallucinationReport(
             original_text=text,
             claims=claims,
@@ -193,6 +219,8 @@ class HallucinationDetector:
             supported_count=supported,
             contradicted_count=contradicted,
             unverifiable_count=unverifiable,
+            citation_density=citation_density,
+            uncited_sentences=uncited,
         )
 
     def _extract_claims(self, text: str) -> list[Claim]:
@@ -358,6 +386,46 @@ class HallucinationDetector:
             reasoning=reasoning,
         )
 
+    def _calculate_citation_density(self, text: str) -> tuple[float, list[str]]:
+        """
+        Calculate citation density for soft evidence gating.
+
+        Returns:
+            Tuple of (citations_per_sentence, list_of_uncited_sentences)
+        """
+        # Split into sentences (simple heuristic)
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            return 0.0, []
+
+        # Count citations per sentence
+        # Look for patterns like [1], [2,3], (Author, 2024), etc.
+        citation_patterns = [
+            r'\[\d+\]',           # [1], [2]
+            r'\[\d+(?:,\s*\d+)*\]',  # [1,2,3]
+            r'\[\d+-\d+\]',       # [1-5]
+            r'\([A-Z][a-z]+(?:\s+et\s+al\.?)?,?\s*\d{4}\)',  # (Smith, 2024)
+            r'\([A-Z][a-z]+\s+&\s+[A-Z][a-z]+,?\s*\d{4}\)',  # (Smith & Jones, 2024)
+        ]
+
+        combined_pattern = '|'.join(citation_patterns)
+        cited_count = 0
+        uncited = []
+
+        for sentence in sentences:
+            if re.search(combined_pattern, sentence):
+                cited_count += 1
+            else:
+                # Only track uncited sentences that are substantive
+                if len(sentence) > 30:  # Skip short sentences
+                    uncited.append(sentence[:100] + "..." if len(sentence) > 100 else sentence)
+
+        citation_density = cited_count / len(sentences) if sentences else 0.0
+
+        return citation_density, uncited[:10]  # Limit uncited list
+
     def quick_check(self, text: str, threshold: float = 0.3) -> tuple[bool, float]:
         """
         Quick hallucination check without full report.
@@ -403,3 +471,20 @@ def verify_claim(claim: str, **kwargs) -> VerificationResult:
     claim_obj = Claim(text=claim, source_sentence=claim, claim_index=0)
     evidence = detector._retrieve_evidence(claim_obj)
     return detector._verify_claim(claim_obj, evidence)
+
+
+def extract_claims(text: str, **kwargs) -> list[Claim]:
+    """
+    Extract verifiable claims from text.
+
+    Convenience function for use in research agent and other modules.
+
+    Args:
+        text: Text to extract claims from
+        **kwargs: Arguments for HallucinationDetector
+
+    Returns:
+        List of Claim objects
+    """
+    detector = HallucinationDetector(**kwargs)
+    return detector._extract_claims(text)

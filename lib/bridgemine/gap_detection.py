@@ -10,8 +10,10 @@ to Problem Y in Domain D, but Method A hasn't been applied in Domain D,
 this is a potential research opportunity.
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from lib.config import config
@@ -19,19 +21,33 @@ from lib.db.neo4j import get_neo4j_driver
 
 logger = logging.getLogger(__name__)
 
-# Generic methods to filter out (too broad to be actionable)
-GENERIC_METHODS = {
-    "deep_learning",
-    "machine_learning",
-    "neural_network",
-    "artificial_intelligence",
-    "statistical_analysis",
-    "data_analysis",
-    "computational_method",
-    "algorithm",
-    "model",
-    "framework",
-}
+
+def _load_generic_methods() -> set[str]:
+    """
+    Load generic methods from config file.
+
+    This allows updating the exclusion list without code deployment.
+    """
+    config_path = Path(config.PROJECT_ROOT) / "data" / "config" / "generic_methods.json"
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+            return set(m.lower() for m in data.get("generic_methods", []))
+    except FileNotFoundError:
+        logger.warning(f"Generic methods config not found at {config_path}, using defaults")
+        return {
+            "deep_learning", "machine_learning", "neural_network",
+            "artificial_intelligence", "statistical_analysis", "data_analysis",
+            "computational_method", "algorithm", "model", "framework",
+        }
+    except Exception as e:
+        logger.error(f"Failed to load generic methods config: {e}")
+        return set()
+
+
+# Load at module import, can be reloaded
+GENERIC_METHODS = _load_generic_methods()
 
 
 @dataclass

@@ -104,7 +104,22 @@ CREATE INDEX code_language_idx IF NOT EXISTS FOR (c:Code) ON (c.language);
 // (paper:Paper)-[:DISCUSSES {count: 5, avg_confidence: 0.85}]->(c:METHOD)
 
 // Concept -> Concept relationships
-// (m:METHOD)-[:SOLVES]->(p:PROBLEM)
+// IMPORTANT: SOLVES includes context property for domain-specific validity
+// A method might solve a problem in histology but fail in cytology
+// (m:METHOD)-[:SOLVES {context: "spatial", organism: "human", cell_type: null}]->(p:PROBLEM)
+//
+// Context properties:
+//   - context: Domain/modality where this works (e.g., "spatial", "bulk", "single-cell")
+//   - organism: Species context (e.g., "human", "mouse", "in vitro")
+//   - cell_type: Cell type context (e.g., "tumor", "immune", null for general)
+//   - experimental_condition: Specific conditions (e.g., "FFPE", "fresh frozen")
+//   - confidence: Extraction confidence score (0-1)
+//   - source_count: Number of papers supporting this relationship
+//
+// Examples:
+// (m:METHOD {name: "Cell2location"})-[:SOLVES {context: "spatial", organism: "human"}]->(p:PROBLEM {name: "deconvolution"})
+// (m:METHOD {name: "RCTD"})-[:SOLVES {context: "spatial", organism: "mouse"}]->(p:PROBLEM {name: "deconvolution"})
+
 // (m:METHOD)-[:APPLIES_TO]->(d:DATASET)
 // (m:METHOD)-[:IMPLEMENTS]->(mech:MECHANISM)
 // (m:METHOD)-[:OPERATES_ON]->(ds:DATA_STRUCTURE)
