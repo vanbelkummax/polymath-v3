@@ -38,6 +38,59 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 1000
 
 
+def prune_superseded(driver):
+    """
+    Remove Passage nodes from Neo4j that have been marked as superseded in Postgres.
+
+    This is the "Graph Garbage Collector" - ensures Neo4j reflects Postgres soft deletes.
+    Call this before syncing new data to clean up stale nodes.
+    """
+    logger.info("Pruning superseded passages from graph...")
+
+    pool = get_pg_pool()
+
+    # 1. Get IDs of superseded passages from Postgres
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT passage_id
+                FROM passages
+                WHERE is_superseded = TRUE
+                """
+            )
+            superseded_ids = [str(row["passage_id"]) for row in cur.fetchall()]
+
+    if not superseded_ids:
+        logger.info("  No superseded passages found to prune.")
+        return 0
+
+    logger.info(f"  Found {len(superseded_ids)} superseded passages to prune.")
+    pruned = 0
+
+    # 2. Delete them from Neo4j in batches
+    # DETACH DELETE removes the node AND its relationships (MENTIONS, FROM_PAPER)
+    for i in range(0, len(superseded_ids), BATCH_SIZE):
+        batch = superseded_ids[i:i + BATCH_SIZE]
+
+        result, _, _ = driver.execute_query(
+            """
+            UNWIND $ids as pid
+            MATCH (p:Passage {passage_id: pid})
+            DETACH DELETE p
+            RETURN count(*) as deleted
+            """,
+            ids=batch,
+        )
+
+        batch_deleted = result[0]["deleted"] if result else 0
+        pruned += batch_deleted
+        logger.info(f"  Pruned {i + len(batch)}/{len(superseded_ids)} passages ({pruned} deleted)")
+
+    logger.info(f"✓ Pruning complete: removed {pruned} stale nodes")
+    return pruned
+
+
 def sync_papers(driver, incremental: bool = False):
     """Sync documents to Paper nodes."""
     logger.info("Syncing Paper nodes...")
@@ -119,17 +172,19 @@ def sync_papers(driver, incremental: bool = False):
 
 
 def sync_passages(driver, incremental: bool = False):
-    """Sync passages to Passage nodes."""
+    """Sync passages to Passage nodes (excludes superseded)."""
     logger.info("Syncing Passage nodes...")
 
     pool = get_pg_pool()
 
     with pool.connection() as conn:
         with conn.cursor() as cur:
+            # Only sync active passages (not superseded)
             cur.execute(
                 """
                 SELECT passage_id, doc_id, section, parent_section
                 FROM passages
+                WHERE is_superseded = FALSE OR is_superseded IS NULL
                 ORDER BY created_at
                 """
             )
@@ -338,6 +393,7 @@ def main():
     try:
         if args.full:
             logger.info("Starting full sync...")
+            prune_superseded(driver)  # Clean stale nodes first
             sync_papers(driver, incremental=False)
             sync_passages(driver, incremental=False)
             sync_concepts(driver)
@@ -346,6 +402,7 @@ def main():
 
         elif args.incremental:
             logger.info("Starting incremental sync...")
+            prune_superseded(driver)  # Clean stale nodes first
             sync_papers(driver, incremental=True)
             sync_passages(driver, incremental=True)
             sync_concepts(driver)
@@ -364,6 +421,7 @@ def main():
         else:
             # Default: incremental
             logger.info("Starting default sync...")
+            prune_superseded(driver)  # Clean stale nodes first
             sync_papers(driver, incremental=True)
             sync_concepts(driver)
             sync_mentions(driver)
