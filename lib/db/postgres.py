@@ -194,3 +194,39 @@ def close_pool() -> None:
         _pool.close()
         _pool = None
         logger.info("Postgres connection pool closed")
+
+
+def configure_for_batch_worker() -> None:
+    """
+    Configure minimal connection pool for batch worker processes.
+
+    IMPORTANT: Call this at the start of batch scripts to prevent
+    connection exhaustion when running multiple workers.
+
+    Each worker gets exactly 1 connection (min=1, max=1), which:
+    - Prevents connection pile-up across distributed workers
+    - Avoids "too many connections" errors
+    - Is sufficient since batch work is serialized per-worker
+
+    Usage:
+        # At start of batch script
+        from lib.db.postgres import configure_for_batch_worker
+        configure_for_batch_worker()
+
+        # Then use get_pg_pool() or get_pg_connection() as normal
+    """
+    global _pool
+
+    if _pool is not None:
+        logger.warning("Pool already initialized, skipping batch configuration")
+        return
+
+    # Force minimal pool for batch workers
+    logger.info("Configuring minimal connection pool for batch worker (1 connection)")
+    _pool = ConnectionPool(
+        config.POSTGRES_DSN,
+        min_size=1,
+        max_size=1,
+        kwargs={"row_factory": dict_row},
+        configure=_configure_connection,
+    )

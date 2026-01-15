@@ -24,6 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.config import config
 from lib.ingest.concept_extractor import ConceptExtractor
 
+# Configure minimal connection pool for batch workers (1 connection per worker)
+# This MUST be called before any database access to prevent connection exhaustion
+from lib.db.postgres import configure_for_batch_worker
+configure_for_batch_worker()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",

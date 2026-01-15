@@ -12,10 +12,37 @@ from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime, timezone
 
+from typing import TypedDict
+
 from lib.config import config
 from lib.prompts import CONCEPT_EXTRACTION_PROMPT, format_prompt
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Type Definitions (prevents key errors in dict handling)
+# =============================================================================
+
+
+class ConceptDict(TypedDict, total=False):
+    """Type definition for concept dictionaries from JSON parsing."""
+
+    name: str
+    concept: str  # Alternative key
+    confidence: float
+    evidence: str
+
+
+class ExtractionResponseDict(TypedDict, total=False):
+    """Type definition for extraction API response."""
+
+    methods: list[str | ConceptDict]
+    problems: list[str | ConceptDict]
+    domains: list[str | ConceptDict]
+    datasets: list[str | ConceptDict]
+    metrics: list[str | ConceptDict]
+    entities: list[str | ConceptDict]
 
 
 @dataclass
@@ -86,6 +113,7 @@ class ConceptExtractor:
         self,
         text: str,
         max_length: int = 4000,
+        canonicalize: bool = True,
     ) -> ExtractionResult:
         """
         Extract concepts from text.
@@ -93,6 +121,7 @@ class ConceptExtractor:
         Args:
             text: Text to extract concepts from
             max_length: Maximum text length to process
+            canonicalize: Whether to canonicalize concept names
 
         Returns:
             ExtractionResult with extracted concepts
@@ -121,6 +150,11 @@ class ConceptExtractor:
 
             raw_response = response.text
             concepts = self._parse_response(raw_response)
+
+            # Canonicalize concept names to prevent graph fragmentation
+            if canonicalize and concepts:
+                from lib.ingest.concept_canonicalizer import canonicalize_concepts
+                concepts = canonicalize_concepts(concepts)
 
             return ExtractionResult(
                 concepts=concepts,

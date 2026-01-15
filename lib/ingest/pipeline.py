@@ -200,7 +200,23 @@ class IngestPipeline:
                 elapsed_seconds=elapsed,
             )
 
+        except (SystemExit, KeyboardInterrupt):
+            # Always re-raise these - user wants to stop
+            raise
+
         except Exception as e:
+            # Check for critical database errors that should halt processing
+            error_str = str(e).lower()
+            if any(term in error_str for term in [
+                "connection refused",
+                "database is starting up",
+                "too many connections",
+                "out of memory",
+                "disk full",
+            ]):
+                logger.critical(f"Critical database error, halting: {e}")
+                raise
+
             logger.error(f"Ingestion failed for {pdf_path}: {e}")
             return IngestResult(
                 success=False,
