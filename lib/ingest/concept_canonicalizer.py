@@ -11,14 +11,182 @@ Two strategies:
 
 import logging
 import re
+import threading
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
+
+import numpy as np
 
 from lib.config import config
 from lib.db.postgres import get_pg_pool
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Concept Centroid Cache (Solves N+1 Query Problem)
+# =============================================================================
+# Pre-loads top concept embeddings into memory for fast similarity matching.
+# Avoids per-concept database queries during bulk ingestion.
+# =============================================================================
+
+
+class ConceptCentroidCache:
+    """
+    In-memory cache of concept embeddings for fast similarity matching.
+
+    Loads top N concepts by mention count at startup, then uses
+    numpy for vectorized cosine similarity (no DB queries).
+
+    Usage:
+        cache = get_concept_cache()
+        match = cache.find_similar("Cell2Loc", threshold=0.92)
+        if match:
+            print(f"Matched: {match['name']} (similarity: {match['similarity']:.3f})")
+    """
+
+    def __init__(self, max_concepts: int = 2000):
+        self.max_concepts = max_concepts
+        self._names: list[str] = []
+        self._embeddings: Optional[np.ndarray] = None
+        self._loaded = False
+        self._lock = threading.Lock()
+        self._load_time = 0.0
+
+    def _load(self) -> None:
+        """Load concept embeddings from database."""
+        if self._loaded:
+            return
+
+        with self._lock:
+            if self._loaded:
+                return
+
+            start = time.time()
+            logger.info(f"Loading concept centroid cache (max {self.max_concepts})...")
+
+            try:
+                pool = get_pg_pool()
+                with pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        # Get top concepts with their average passage embedding
+                        cur.execute(
+                            """
+                            WITH top_concepts AS (
+                                SELECT concept_name, COUNT(*) as cnt
+                                FROM passage_concepts
+                                GROUP BY concept_name
+                                ORDER BY cnt DESC
+                                LIMIT %s
+                            )
+                            SELECT
+                                tc.concept_name,
+                                AVG(p.embedding)::vector as centroid
+                            FROM top_concepts tc
+                            JOIN passage_concepts pc ON tc.concept_name = pc.concept_name
+                            JOIN passages p ON pc.passage_id = p.passage_id
+                            WHERE p.embedding IS NOT NULL
+                            GROUP BY tc.concept_name
+                            """,
+                            (self.max_concepts,),
+                        )
+
+                        names = []
+                        embeddings = []
+
+                        for row in cur:
+                            if row["centroid"] is not None:
+                                names.append(row["concept_name"])
+                                embeddings.append(row["centroid"])
+
+                        if embeddings:
+                            self._names = names
+                            self._embeddings = np.array(embeddings, dtype=np.float32)
+                            # Normalize for cosine similarity
+                            norms = np.linalg.norm(self._embeddings, axis=1, keepdims=True)
+                            self._embeddings = self._embeddings / (norms + 1e-8)
+
+                self._loaded = True
+                self._load_time = time.time() - start
+                logger.info(
+                    f"Loaded {len(self._names)} concept centroids in {self._load_time:.2f}s"
+                )
+
+            except Exception as e:
+                logger.warning(f"Failed to load concept cache: {e}")
+                self._loaded = True  # Don't retry on failure
+                self._names = []
+                self._embeddings = None
+
+    def find_similar(
+        self,
+        name: str,
+        threshold: float = 0.92,
+    ) -> Optional[dict]:
+        """
+        Find the most similar existing concept using cached embeddings.
+
+        Args:
+            name: Concept name to match
+            threshold: Minimum cosine similarity
+
+        Returns:
+            Dict with name and similarity if match found, else None
+        """
+        self._load()
+
+        if self._embeddings is None or len(self._names) == 0:
+            return None
+
+        try:
+            from lib.embeddings.bge_m3 import get_embedder
+
+            embedder = get_embedder()
+            query_embedding = embedder.encode([name])[0].astype(np.float32)
+
+            # Normalize query
+            query_norm = np.linalg.norm(query_embedding)
+            if query_norm > 0:
+                query_embedding = query_embedding / query_norm
+
+            # Vectorized cosine similarity (no DB query!)
+            similarities = self._embeddings @ query_embedding
+
+            best_idx = np.argmax(similarities)
+            best_sim = float(similarities[best_idx])
+
+            if best_sim >= threshold:
+                return {
+                    "name": self._names[best_idx],
+                    "similarity": best_sim,
+                }
+
+        except Exception as e:
+            logger.debug(f"Cache similarity search failed: {e}")
+
+        return None
+
+    def invalidate(self) -> None:
+        """Invalidate cache (call after bulk inserts)."""
+        with self._lock:
+            self._loaded = False
+            self._names = []
+            self._embeddings = None
+            logger.info("Concept centroid cache invalidated")
+
+
+# Global cache instance
+_concept_cache: Optional[ConceptCentroidCache] = None
+
+
+def get_concept_cache() -> ConceptCentroidCache:
+    """Get or create the global concept cache."""
+    global _concept_cache
+    if _concept_cache is None:
+        _concept_cache = ConceptCentroidCache()
+    return _concept_cache
 
 
 # =============================================================================
@@ -195,54 +363,14 @@ def _find_existing_concept_by_embedding(
     """
     Find an existing concept by embedding similarity.
 
-    This is slower but more accurate for catching variants like:
-    - "Cell2Location" vs "cell2location" vs "Cell2Loc"
+    Uses the in-memory centroid cache to avoid N+1 queries.
+    This catches variants like "Cell2Location" vs "cell2location" vs "Cell2Loc".
 
     Returns:
-        Dict with name, similarity, passage_id if match found
+        Dict with name, similarity if match found
     """
-    try:
-        from lib.embeddings.bge_m3 import get_embedder
-
-        embedder = get_embedder()
-        name_embedding = embedder.encode([name])[0].tolist()
-
-        pool = get_pg_pool()
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                # Find closest existing concept
-                cur.execute(
-                    """
-                    SELECT DISTINCT concept_name, passage_id,
-                           1 - (pc_embedding <=> %s::vector) as similarity
-                    FROM passage_concepts pc
-                    JOIN (
-                        -- Get embedding for each unique concept
-                        SELECT concept_name,
-                               (SELECT embedding FROM passages
-                                WHERE passage_id = pc2.passage_id LIMIT 1) as pc_embedding
-                        FROM passage_concepts pc2
-                        GROUP BY concept_name, passage_id
-                    ) sub ON pc.concept_name = sub.concept_name
-                    WHERE sub.pc_embedding IS NOT NULL
-                    ORDER BY pc_embedding <=> %s::vector
-                    LIMIT 1
-                    """,
-                    (name_embedding, name_embedding),
-                )
-
-                row = cur.fetchone()
-                if row and row["similarity"] >= threshold:
-                    return {
-                        "name": row["concept_name"],
-                        "similarity": row["similarity"],
-                        "passage_id": row["passage_id"],
-                    }
-
-    except Exception as e:
-        logger.debug(f"Embedding match failed: {e}")
-
-    return None
+    cache = get_concept_cache()
+    return cache.find_similar(name, threshold=threshold)
 
 
 def canonicalize_concepts(
