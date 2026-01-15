@@ -1,0 +1,10 @@
+{"query": "spatial transcriptomics cell type deconvolution", "relevant_ids": [], "domain": "spatial_transcriptomics", "difficulty": "medium", "notes": "Key query - add relevant passage IDs after manual labeling"}
+{"query": "transformer attention mechanism self-attention", "relevant_ids": [], "domain": "deep_learning", "difficulty": "easy", "notes": "Foundational ML concept"}
+{"query": "graph neural network message passing", "relevant_ids": [], "domain": "deep_learning", "difficulty": "medium", "notes": "GNN fundamentals"}
+{"query": "H&E staining histopathology image analysis", "relevant_ids": [], "domain": "pathology", "difficulty": "medium", "notes": "Core to Img2ST research"}
+{"query": "Visium HD subcellular resolution spatial", "relevant_ids": [], "domain": "spatial_transcriptomics", "difficulty": "hard", "notes": "Cutting-edge technology"}
+{"query": "single cell RNA sequencing clustering", "relevant_ids": [], "domain": "single_cell", "difficulty": "easy", "notes": "Standard scRNA-seq workflow"}
+{"query": "variational autoencoder latent space", "relevant_ids": [], "domain": "deep_learning", "difficulty": "medium", "notes": "VAE fundamentals"}
+{"query": "gene regulatory network inference", "relevant_ids": [], "domain": "systems_biology", "difficulty": "hard", "notes": "Complex systems biology"}
+{"query": "contrastive learning self-supervised representation", "relevant_ids": [], "domain": "deep_learning", "difficulty": "medium", "notes": "Modern SSL methods"}
+{"query": "spot deconvolution spatial transcriptomics mixture", "relevant_ids": [], "domain": "spatial_transcriptomics", "difficulty": "hard", "notes": "Core ST challenge"}
