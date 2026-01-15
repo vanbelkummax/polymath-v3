@@ -205,6 +205,7 @@ class HybridSearcher:
                     FROM passages p
                     JOIN documents d ON p.doc_id = d.doc_id
                     WHERE p.embedding IS NOT NULL
+                      AND (p.is_superseded = FALSE OR p.is_superseded IS NULL)
                     {filter_clause}
                     ORDER BY p.embedding <=> %s::vector
                     LIMIT %s
@@ -271,6 +272,7 @@ class HybridSearcher:
                     FROM passages p
                     JOIN documents d ON p.doc_id = d.doc_id
                     WHERE p.search_vector @@ websearch_to_tsquery('english', %s)
+                      AND (p.is_superseded = FALSE OR p.is_superseded IS NULL)
                     {filter_clause}
                     ORDER BY rank DESC
                     LIMIT %s
@@ -482,6 +484,7 @@ class HybridSearcher:
                     JOIN documents d ON p.doc_id = d.doc_id
                     WHERE p.passage_id != %s
                       AND p.embedding IS NOT NULL
+                      AND (p.is_superseded = FALSE OR p.is_superseded IS NULL)
                     ORDER BY p.embedding <=> %s::vector
                     LIMIT %s
                     """,

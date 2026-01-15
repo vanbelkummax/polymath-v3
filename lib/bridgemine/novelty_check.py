@@ -164,6 +164,7 @@ class NoveltyChecker:
                         SELECT COUNT(*) as count
                         FROM passages p
                         WHERE p.search_vector @@ websearch_to_tsquery('english', %s)
+                          AND (p.is_superseded = FALSE OR p.is_superseded IS NULL)
                         """,
                         (query,),
                     )
