@@ -208,8 +208,21 @@ def configure_for_batch_worker() -> None:
     - Avoids "too many connections" errors
     - Is sufficient since batch work is serialized per-worker
 
+    MULTIPROCESSING WARNING (fork vs spawn):
+    -----------------------------------------
+    Python's default "fork" context on Linux copies file descriptors,
+    which can cause pool corruption if workers inherit parent connections.
+
+    Safe patterns:
+    1. Call configure_for_batch_worker() INSIDE each worker process
+    2. Or use spawn context: multiprocessing.set_start_method('spawn')
+    3. Or use ThreadPoolExecutor instead (recommended for I/O bound work)
+
+    The IngestPipeline uses ThreadPoolExecutor, which is safe.
+    GCP Batch workers are separate processes, so also safe.
+
     Usage:
-        # At start of batch script
+        # At start of batch script (inside worker process)
         from lib.db.postgres import configure_for_batch_worker
         configure_for_batch_worker()
 

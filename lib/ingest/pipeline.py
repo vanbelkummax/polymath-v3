@@ -70,6 +70,7 @@ class IngestPipeline:
         compute_embeddings: bool = True,
         batch_name: Optional[str] = None,
         zotero_csv_path: Optional[Path] = None,
+        soft_delete: bool = False,
     ):
         """
         Initialize the ingestion pipeline.
@@ -79,9 +80,13 @@ class IngestPipeline:
             compute_embeddings: Whether to compute embeddings
             batch_name: Name for tracking this batch
             zotero_csv_path: Path to Zotero CSV for metadata lookup
+            soft_delete: If True, mark old passages as superseded instead of deleting.
+                        This preserves manual annotations on passages.
+                        Use for re-ingestion when you have user annotations to keep.
         """
         self.extract_concepts = extract_concepts
         self.compute_embeddings = compute_embeddings
+        self.soft_delete = soft_delete
         self.batch_name = batch_name or f"ingest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
         # Initialize components
@@ -294,11 +299,26 @@ class IngestPipeline:
                     ),
                 )
 
-                # Delete existing passages (for re-ingestion)
-                cur.execute(
-                    "DELETE FROM passages WHERE doc_id = %s",
-                    (str(doc_id),),
-                )
+                # Handle existing passages (for re-ingestion)
+                if self.soft_delete:
+                    # Soft delete: mark as superseded to preserve annotations
+                    cur.execute(
+                        """
+                        UPDATE passages
+                        SET is_superseded = TRUE,
+                            superseded_at = NOW(),
+                            superseded_by_batch = %s
+                        WHERE doc_id = %s AND is_superseded = FALSE
+                        """,
+                        (self.batch_name, str(doc_id)),
+                    )
+                    logger.debug(f"Soft-deleted {cur.rowcount} existing passages")
+                else:
+                    # Hard delete: remove old passages (faster, but loses annotations)
+                    cur.execute(
+                        "DELETE FROM passages WHERE doc_id = %s",
+                        (str(doc_id),),
+                    )
 
                 # Insert passages with embeddings
                 passage_count = 0
