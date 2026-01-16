@@ -144,7 +144,7 @@ class ConceptExtractor:
                 contents=prompt,
                 config={
                     "temperature": 0.1,
-                    "max_output_tokens": 4096,
+                    "max_output_tokens": 8192,  # Model supports up to 8192
                 },
             )
 
