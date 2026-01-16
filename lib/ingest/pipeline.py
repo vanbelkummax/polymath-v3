@@ -324,7 +324,7 @@ class IngestPipeline:
                 passage_count = 0
                 for i, chunk in enumerate(chunks):
                     passage_id = get_passage_id(doc_id, chunk.char_start, chunk.char_end)
-                    embedding = embeddings[i] if embeddings else None
+                    embedding = embeddings[i] if (embeddings is not None and len(embeddings) > i) else None
 
                     cur.execute(
                         """

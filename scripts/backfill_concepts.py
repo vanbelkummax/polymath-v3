@@ -84,7 +84,7 @@ def save_concepts(passage_id: str, concepts: list, extractor_model: str):
                         passage_id, concept_name, concept_type, confidence,
                         extractor_model, extractor_version
                     ) VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (passage_id, concept_name) DO NOTHING
+                    ON CONFLICT (passage_id, concept_name, extractor_version) DO NOTHING
                     """,
                     (
                         passage_id,

@@ -1,166 +1,94 @@
-# Polymath v3 - Reconstruction Guide
+# Polymath v3 - Production Pipeline Guide
 
-## Quick Start
+## Status (2026-01-16)
 
-```bash
-# 1. Reset database
-psql -U polymath -c "DROP DATABASE IF EXISTS polymath_v3; CREATE DATABASE polymath_v3;"
-psql -U polymath -d polymath_v3 -f schema/postgres/001_core.sql
-psql -U polymath -d polymath_v3 -f schema/postgres/002_concepts.sql
-psql -U polymath -d polymath_v3 -f schema/postgres/005_soft_delete.sql
+Pipeline validated and in production. Using main `polymath` database with migrated schema.
 
-# 2. Ingest from Zotero CSVs (prototype first)
-python scripts/ingest_from_zotero.py --csv /path/to/zotero.csv --limit 200
+**IMPORTANT:** This is the canonical source of truth for Polymath v3 code. Do NOT use `/home/user/polymath-repo/` for v3 features.
 
-# 3. Full batch via GCP
-python scripts/ingest_from_zotero.py --csv /path/to/zotero.csv --batch
-```
+---
+
+## Key Directories
+
+| Path | Purpose | Status |
+|------|---------|--------|
+| `/home/user/polymath-v3/` | **CANONICAL v3 CODE** | Active |
+| `/home/user/polymath-repo/` | Legacy v2 code | Reference only |
+| `/home/user/work/polymax/` | Prototyping/scratch | May be outdated |
 
 ---
 
 ## Data Sources
 
-| Source | Location | Count |
-|--------|----------|-------|
-| Zotero CSV 1 | `/mnt/c/Users/User/Downloads/Polymath_Full_.csv` | 3,175 |
-| Zotero CSV 2 | `/mnt/c/Users/User/Downloads/polymath2_.csv` | 1,124 |
-| PDF Storage | `/mnt/c/Users/User/Zotero/storage/` | WSL path |
-
-**CSV Columns**: Key, Title, Author, DOI, Abstract Note, File Attachments
-
----
-
-## Architecture
-
-```
-Zotero CSV → IngestPipeline → Postgres (pgvector) → Neo4j (concepts)
-                  ↓
-         GCP Batch API (concepts)
-```
-
-| Component | Purpose |
-|-----------|---------|
-| `lib/ingest/pipeline.py` | PDF → chunks → embeddings → DB |
-| `lib/ingest/metadata.py` | Zotero/CrossRef resolution |
-| `lib/embeddings/bge_m3.py` | BGE-M3 1024-dim vectors |
-| `batch/concept_extraction.py` | GCP Batch for Gemini |
-| `scripts/sync_neo4j.py` | Postgres → Neo4j sync |
+| Source | Path | Count |
+|--------|------|-------|
+| Zotero CSV 1 | `/mnt/c/Users/User/Downloads/Polymath_Full_.csv` | ~3,000 |
+| Zotero CSV 2 | `/mnt/c/Users/User/Downloads/polymath2_.csv` | ~1,100 |
+| PDF Storage | `/mnt/c/Users/User/Zotero/storage/` | WSL mount |
+| PDFs on disk | ~1,250 available | |
 
 ---
 
-## GCP Batch Configuration
+## AI Models
 
-```bash
-export GCP_PROJECT_ID="fifth-branch-483806-m1"
-export GCP_BUCKET="gs://polymath-batch-jobs"
-export GEMINI_API_KEY="your-key"
-```
-
-**Batch Concept Extraction:**
-```bash
-# Submit async batch job (50% cheaper)
-python batch/submit_concept_job.py --input passages.jsonl
-
-# Check status
-python batch/submit_concept_job.py --status JOB_ID
-
-# Process results
-python batch/process_batch_results.py --job JOB_ID
-```
+| Stage | Model | Location | Cost |
+|-------|-------|----------|------|
+| Embeddings | BGE-M3 (1024-dim) | Local GPU | $0 |
+| Concept Extraction | gemini-2.0-flash | Gemini API | ~$0.00001/passage |
+| Reranking | bge-reranker-v2-m3 | Local GPU | $0 |
 
 ---
 
-## Ingestion Commands
+## Quick Start: Ingest PDFs
 
-### Prototype (local, 200 PDFs)
 ```bash
+cd /home/user/polymath-v3
+export POSTGRES_DSN="dbname=polymath user=polymath host=/var/run/postgresql"
+export NEO4J_PASSWORD="polymathic2026"
+
+# Dry run first
 python scripts/ingest_from_zotero.py \
   --csv '/mnt/c/Users/User/Downloads/Polymath_Full_.csv' \
-  --limit 200 \
-  --workers 4
-```
+  --csv '/mnt/c/Users/User/Downloads/polymath2_.csv' \
+  --limit 200 --dry-run
 
-### Full Batch (GCP)
-```bash
+# Ingest (skip concepts for batch later)
 python scripts/ingest_from_zotero.py \
   --csv '/mnt/c/Users/User/Downloads/Polymath_Full_.csv' \
-  --batch \
-  --skip-concepts  # Extract concepts via GCP batch later
+  --csv '/mnt/c/Users/User/Downloads/polymath2_.csv' \
+  --limit 200 --skip-concepts --workers 4
+
+# Verify
+psql -U polymath -d polymath -c "
+  SELECT ingest_batch, count(*) FROM documents
+  WHERE ingest_batch IS NOT NULL
+  GROUP BY ingest_batch ORDER BY ingest_batch DESC LIMIT 5;
+"
 ```
 
-### Concept Backfill
-```bash
-# Export passages needing concepts
-psql -U polymath -d polymath_v3 -c "
-  SELECT passage_id, passage_text
-  FROM passages p
-  WHERE NOT EXISTS (
-    SELECT 1 FROM passage_concepts pc WHERE pc.passage_id = p.passage_id
-  )
-" -t -A -F $'\t' > missing_concepts.tsv
-
-# Submit to GCP Batch
-python batch/submit_concept_job.py --input missing_concepts.tsv
-```
+**Performance:** ~9-15 seconds per PDF, ~30 passages average
 
 ---
 
-## Database Schema (Essential)
-
-```sql
--- Documents
-CREATE TABLE documents (
-  doc_id UUID PRIMARY KEY,
-  title TEXT NOT NULL,
-  title_hash VARCHAR(64) UNIQUE,
-  doi VARCHAR(100) UNIQUE,
-  authors TEXT[],
-  year INTEGER,
-  zotero_key VARCHAR(20)
-);
-
--- Passages with vectors
-CREATE TABLE passages (
-  passage_id UUID PRIMARY KEY,
-  doc_id UUID REFERENCES documents,
-  passage_text TEXT,
-  embedding vector(1024),
-  is_superseded BOOLEAN DEFAULT FALSE
-);
-
--- Concepts
-CREATE TABLE passage_concepts (
-  passage_id UUID REFERENCES passages,
-  concept_name VARCHAR(200),
-  concept_type VARCHAR(50),
-  confidence REAL
-);
-```
-
----
-
-## Validation
+## Concept Extraction
 
 ```bash
-# Check counts
-psql -U polymath -d polymath_v3 -c "
-  SELECT 'documents' as tbl, count(*) FROM documents
-  UNION ALL
-  SELECT 'passages', count(*) FROM passages
-  UNION ALL
-  SELECT 'concepts', count(*) FROM passage_concepts;
-"
+cd /home/user/polymath-v3
+export POSTGRES_DSN="dbname=polymath user=polymath host=/var/run/postgresql"
 
-# Test search
-python -c "
-from lib.search.hybrid_search import HybridSearcher
-s = HybridSearcher()
-r = s.search('spatial transcriptomics', n=5)
-for x in r.results: print(f'{x.score:.3f} {x.title[:50]}')
-"
+# Targeted extraction for a specific batch
+python scripts/extract_new_batch.py
 
-# Run eval
-python scripts/run_evaluation.py --eval-set data/eval_sets/core.jsonl
+# Or use backfill for all passages without concepts
+python scripts/backfill_concepts.py --limit 500 --batch-size 30
+
+# Verify
+psql -U polymath -d polymath -c "
+  SELECT concept_type, count(*)
+  FROM passage_concepts
+  WHERE extractor_version = 'v3.0'
+  GROUP BY concept_type;
+"
 ```
 
 ---
@@ -168,12 +96,79 @@ python scripts/run_evaluation.py --eval-set data/eval_sets/core.jsonl
 ## Neo4j Sync
 
 ```bash
-# Full sync after ingestion
-python scripts/sync_neo4j.py --full
+docker start neo4j
+python scripts/sync_neo4j.py --incremental  # or --full
 
-# Incremental (new docs only)
-python scripts/sync_neo4j.py --incremental
+cypher-shell -u neo4j -p polymathic2026 "
+  MATCH (p:Passage) RETURN 'passages', count(p)
+  UNION ALL MATCH (c:Concept) RETURN 'concepts', count(c);
+"
 ```
+
+---
+
+## Search
+
+```bash
+python -c "
+from lib.search.hybrid_search import HybridSearcher
+s = HybridSearcher()
+r = s.search('spatial transcriptomics', n=5, rerank=True)
+for x in r.results: print(f'{x.score:.3f} {x.title[:50]}')
+"
+```
+
+---
+
+## Architecture
+
+```
+Zotero CSV → IngestPipeline → Postgres (pgvector) → Neo4j
+                  ↓                    ↓
+            BGE-M3 (local)      Gemini API (concepts)
+```
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Ingestion | `scripts/ingest_from_zotero.py` | Zotero CSV → PDFs → DB |
+| Pipeline | `lib/ingest/pipeline.py` | PDF → chunks → embeddings |
+| Concept Extraction | `lib/ingest/concept_extractor.py` | Text → concepts via Gemini |
+| Embeddings | `lib/embeddings/bge_m3.py` | BGE-M3 1024-dim |
+| Search | `lib/search/hybrid_search.py` | Vector + FTS + Graph |
+| Neo4j Sync | `scripts/sync_neo4j.py` | Postgres → Neo4j |
+
+---
+
+## Environment
+
+```bash
+# Required
+export POSTGRES_DSN="dbname=polymath user=polymath host=/var/run/postgresql"
+export NEO4J_URI="bolt://localhost:7687"
+export NEO4J_PASSWORD="polymathic2026"
+export GCP_PROJECT_ID="fifth-branch-483806-m1"
+```
+
+---
+
+## Known Issues & Fixes (2026-01-16)
+
+### Fixed Issues
+
+| Issue | Root Cause | Fix |
+|-------|------------|-----|
+| Numpy array truth value | `if embeddings` fails for numpy arrays | Use `if (embeddings is not None and len(embeddings) > i)` |
+| Schema mismatch | Main DB uses `page_char_start` vs v3 uses `char_start` | Added new columns to passages table |
+| Missing pgvector column | No `embedding vector(1024)` column | Added via ALTER TABLE |
+| ON CONFLICT mismatch | Wrong columns in conflict clause | Match PK `(passage_id, concept_name, extractor_version)` |
+| API truncation | `max_output_tokens: 1000` too low | **Set to 4096** in concept_extractor.py |
+
+### Key Learnings
+
+1. **Test with production data early** - Truncation only appeared with real passages
+2. **Check API finish reasons** - `FinishReason.MAX_TOKENS` immediately reveals truncation
+3. **Schema migrations need testing** - Multiple column mismatches between v2 and v3
+4. **Backfill scripts should filter by batch** - Avoid processing old non-scientific passages
 
 ---
 
@@ -181,20 +176,32 @@ python scripts/sync_neo4j.py --incremental
 
 | Issue | Fix |
 |-------|-----|
-| PDF not found | Check WSL path: `/mnt/c/Users/User/Zotero/storage/` |
-| OOM on embeddings | Reduce batch size: `BATCH_SIZE=50` |
+| PDF not found | Check `/mnt/c/Users/User/Zotero/storage/` mount |
+| OOM embeddings | Set `--workers 2` or reduce batch size |
 | GCP auth fail | `gcloud auth application-default login` |
-| Neo4j connection | `docker start neo4j` |
+| Neo4j down | `docker start neo4j` |
+| Slow /mnt/ | Copy PDFs to `/home/user/work/` first |
+| Concept extraction fails | Check `max_output_tokens` is 4096 |
+| "No JSON found" | API response truncated - increase token limit |
 
 ---
 
-## Environment
+## Database Schema (Main polymath DB)
 
-```bash
-# Required in .env
-POSTGRES_DSN=dbname=polymath_v3 user=polymath host=/var/run/postgresql
-NEO4J_URI=bolt://localhost:7687
-NEO4J_PASSWORD=polymathic2026
-GEMINI_API_KEY=your-key
-GCP_PROJECT_ID=fifth-branch-483806-m1
+```sql
+-- Key tables
+documents (doc_id, title, authors, year, doi, ingest_batch, ...)
+passages (passage_id, doc_id, passage_text, char_start, char_end, embedding vector(1024), ...)
+passage_concepts (passage_id, concept_name, concept_type, confidence, extractor_version, ...)
 ```
+
+---
+
+## Validation Checklist
+
+| Check | Command | Target |
+|-------|---------|--------|
+| New docs | `SELECT count(*) FROM documents WHERE ingest_batch LIKE 'zotero_ingest_%'` | 38+ |
+| Passages | `SELECT count(*) FROM passages WHERE embedding IS NOT NULL` | 1260+ |
+| Concepts | `SELECT count(*) FROM passage_concepts WHERE extractor_version = 'v3.0'` | 300+ |
+| Search | Test query with rerank | <2s latency |
