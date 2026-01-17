@@ -144,7 +144,7 @@ class ConceptExtractor:
                 contents=prompt,
                 config={
                     "temperature": 0.1,
-                    "max_output_tokens": 8192,  # Model supports up to 8192
+                    "max_output_tokens": 16384,  # gemini-2.5-flash supports up to 65536
                 },
             )
 

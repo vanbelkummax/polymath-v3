@@ -10,9 +10,13 @@
 | Component | Status | Count |
 |-----------|--------|-------|
 | Postgres: passage_concepts | ✅ Done | 5,954 concepts, 973 passages |
-| Postgres: embeddings | ❌ Missing | 0/973 have embeddings |
-| Neo4j: concepts | ❌ Missing | 0 batch-v1 concepts synced |
-| Neo4j: MENTIONS | ❌ Missing | 0 relationships |
+| Postgres: embeddings | ✅ Done | 973/973 have embeddings |
+| Neo4j: concepts | ✅ Done | 5,457 concepts synced |
+| Neo4j: MENTIONS | ✅ Done | 5,954 relationships |
+
+**Completed (2026-01-17):**
+- All 5 tasks complete - batch-v1 integration finished
+- Scripts: `scripts/backfill_embeddings_batch.py`, `scripts/sync_neo4j_batch.py`
 
 **Required Skills:**
 - `superpowers:executing-plans` - Follow the plan task-by-task
