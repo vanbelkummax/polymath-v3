@@ -10,6 +10,22 @@
 | **Schema Migration** | ✅ Complete | `scripts/migrations/002_polymath_assets.sql` |
 | **Asset Detector** | ✅ Complete | `lib/ingest/asset_detector.py` |
 | **Skill Extractor** | ✅ Complete | `lib/ingest/skill_extractor.py` |
+
+### ⚠️ PRIORITY: SkillOps Layer (Do This First!)
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| **Skill Directory Structure** | ✅ Done | `~/.claude/skills/`, `~/.claude/skills_drafts/` |
+| **SKILL.md Template** | ✅ Done | `~/.claude/SKILL_TEMPLATE.md` |
+| **Skill Router Contract** | ✅ Done | `~/.claude/SKILL_ROUTER.md` |
+| **Promotion Script** | ✅ Done | `scripts/promote_skill.py` |
+| **SkillOps Schema** | ✅ Done | `scripts/migrations/003_skillops.sql` |
+| **Skill Registry** | ⏳ Pending | `lib/skills/registry.py` |
+
+### After SkillOps (Lower Priority)
+
+| Component | Status | Location |
+|-----------|--------|----------|
 | **Bridge Analyzer** | ⏳ Pending | `lib/analysis/bridge_analyzer.py` |
 | **Gap Detector** | ⏳ Pending | `lib/analysis/gap_detector.py` |
 | **Neo4j Full Sync** | ⏳ Pending | `lib/db/neo4j_sync.py` |

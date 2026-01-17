@@ -2,25 +2,27 @@
 
 ## ACTIVE TASK (2026-01-17)
 
-**Execute Plan:** `/home/user/polymath-v3/docs/plans/2026-01-17-batch-v1-integration.md`
+**Current Focus:** SkillOps Layer - Automated skill extraction and promotion pipeline
 
-**Goal:** Integrate 5,954 concepts from 973 passages (batch-v1 trial) into Postgres embeddings + Neo4j graph.
+**SkillOps Status:**
+| Component | Status | Location |
+|-----------|--------|----------|
+| Skill Directory Structure | ✅ Done | `~/.claude/skills/`, `~/.claude/skills_drafts/` |
+| SKILL.md Template | ✅ Done | `~/.claude/SKILL_TEMPLATE.md` |
+| Skill Router Contract | ✅ Done | `~/.claude/SKILL_ROUTER.md` |
+| Promotion Script (4 gates) | ✅ Done | `scripts/promote_skill.py` |
+| SkillOps Schema | ✅ Done | `scripts/migrations/003_skillops.sql` |
+| Update SkillExtractor | ⏳ Next | `lib/ingest/skill_extractor.py` |
 
-**Current State:**
-| Component | Status | Count |
-|-----------|--------|-------|
-| Postgres: passage_concepts | ✅ Done | 5,954 concepts, 973 passages |
-| Postgres: embeddings | ✅ Done | 973/973 have embeddings |
-| Neo4j: concepts | ✅ Done | 5,457 concepts synced |
-| Neo4j: MENTIONS | ✅ Done | 5,954 relationships |
-
-**Completed (2026-01-17):**
-- All 5 tasks complete - batch-v1 integration finished
+**Previous Work (Batch-v1 Integration):**
+- 5,954 concepts from 973 passages integrated
 - Scripts: `scripts/backfill_embeddings_batch.py`, `scripts/sync_neo4j_batch.py`
 
-**Required Skills:**
-- `superpowers:executing-plans` - Follow the plan task-by-task
-- `superpowers:subagent-driven-development` - Dispatch subagents per task
+**Skill Promotion Gates:**
+1. Evidence: ≥2 source passages OR 1 passage + 1 code link
+2. Oracle: Runnable test exists and passes
+3. Dedup: Cosine similarity < 0.85 to existing skills
+4. Usage: ≥1 logged successful use (bootstrap-skippable)
 
 ---
 
@@ -74,9 +76,16 @@ Zotero CSV → IngestPipeline → Postgres (pgvector) → Neo4j
 ## Database Schema
 
 ```sql
+-- Core tables
 documents (doc_id, title, authors, year, doi, ingest_batch)
 passages (passage_id, doc_id, passage_text, embedding vector(1024))
 passage_concepts (passage_id, concept_name, concept_type, confidence, extractor_version)
+
+-- SkillOps tables (003_skillops.sql)
+paper_skills (skill_id, skill_name, skill_type, description, embedding, status, is_canonical, canonical_skill_id)
+skill_usage_log (usage_id, skill_name, outcome, oracle_passed, task_description)
+hf_model_mentions (mention_id, doc_id, model_id_raw, resolved, resolved_to_model_id)
+skill_bridges (source_skill_id, target_skill_id, validation_status, usage_count)
 ```
 
 ---
@@ -102,6 +111,24 @@ MATCH (p:Passage)-[r:MENTIONS]->(c:Concept)
 WHERE r.synced_at > datetime() - duration('P1D')
 RETURN count(DISTINCT p) as passages, count(r) as mentions
 "
+```
+
+---
+
+## Skill Promotion Commands
+
+```bash
+# List draft skills
+python scripts/promote_skill.py --list
+
+# Check all drafts (gate validation without promoting)
+python scripts/promote_skill.py --check-all
+
+# Promote a skill (validates all 4 gates)
+python scripts/promote_skill.py <skill-name>
+
+# Bootstrap promotion (skip usage gate for initial skills)
+python scripts/promote_skill.py <skill-name> --bootstrap
 ```
 
 ---
