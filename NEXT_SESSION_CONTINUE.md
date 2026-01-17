@@ -107,6 +107,8 @@ Working directory: `/home/user/polymath-v3`
 ## Start Command
 
 ```
-Read POLYMATH_WORKING_MEMORY.md. SkillOps is complete - continue with Neo4j full sync or BridgeAnalyzer.
-Use TodoWrite to track progress.
+Run E2E pipeline test on 20 papers:
+python scripts/e2e_pipeline_test.py --run-all --papers 20
+
+Or see detailed instructions: cat NEXT_SESSION_E2E_TEST.md
 ```

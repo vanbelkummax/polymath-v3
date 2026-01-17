@@ -12,7 +12,8 @@
 | Skill Router Contract | ✅ Done | `~/.claude/SKILL_ROUTER.md` |
 | Promotion Script (4 gates) | ✅ Done | `scripts/promote_skill.py` |
 | SkillOps Schema | ✅ Done | `scripts/migrations/003_skillops.sql` |
-| Update SkillExtractor | ⏳ Next | `lib/ingest/skill_extractor.py` |
+| SkillExtractor (drafts-only) | ✅ Done | `lib/ingest/skill_extractor.py` |
+| E2E Pipeline Test | ⏳ Next | `scripts/e2e_pipeline_test.py` |
 
 **Previous Work (Batch-v1 Integration):**
 - 5,954 concepts from 973 passages integrated
@@ -111,6 +112,27 @@ MATCH (p:Passage)-[r:MENTIONS]->(c:Concept)
 WHERE r.synced_at > datetime() - duration('P1D')
 RETURN count(DISTINCT p) as passages, count(r) as mentions
 "
+```
+
+---
+
+## E2E Pipeline Test
+
+```bash
+# Run complete pipeline on 20 papers
+python scripts/e2e_pipeline_test.py --run-all --papers 20
+
+# Run individual steps
+python scripts/e2e_pipeline_test.py --step ingest
+python scripts/e2e_pipeline_test.py --step concepts
+python scripts/e2e_pipeline_test.py --step assets
+python scripts/e2e_pipeline_test.py --step skills
+python scripts/e2e_pipeline_test.py --step citations
+python scripts/e2e_pipeline_test.py --step neo4j
+python scripts/e2e_pipeline_test.py --step registry
+
+# Generate report only
+python scripts/e2e_pipeline_test.py --report
 ```
 
 ---
