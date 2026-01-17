@@ -5,6 +5,9 @@ Skill Extraction for Polymath System.
 Extracts actionable skills (methods, algorithms, workflows) from paper passages
 using LLM analysis. Identifies cross-domain transfer potential.
 
+IMPORTANT: Skills are written to ~/.claude/skills_drafts/ only.
+Use scripts/promote_skill.py to promote validated skills to ~/.claude/skills/.
+
 Usage:
     from lib.ingest.skill_extractor import SkillExtractor
 
@@ -14,14 +17,20 @@ Usage:
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 import psycopg2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Skill output directories
+SKILLS_DRAFTS_DIR = Path.home() / ".claude" / "skills_drafts"
 
 
 # ============================================================
@@ -467,6 +476,261 @@ class SkillExtractor:
              'description': row[3], 'similarity': row[4]}
             for row in cur.fetchall()
         ]
+
+    # =========================================================================
+    # DRAFT SKILL FILE GENERATION
+    # =========================================================================
+
+    def write_to_drafts(
+        self,
+        skills: List[ExtractedSkill],
+        doc_id: str,
+        title: str = "Unknown",
+        code_links: List[Dict] = None
+    ) -> List[Path]:
+        """
+        Write extracted skills to ~/.claude/skills_drafts/ as CANDIDATE.md files.
+
+        This is the ONLY place skills should be written. Use scripts/promote_skill.py
+        to promote validated skills to ~/.claude/skills/.
+
+        Args:
+            skills: List of extracted skills
+            doc_id: Source document ID
+            title: Paper title
+            code_links: Optional list of code references {'repo_url': ..., 'file_path': ...}
+
+        Returns:
+            List of paths to created skill directories
+        """
+        if not skills:
+            return []
+
+        # Ensure drafts directory exists
+        SKILLS_DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        created_paths = []
+        code_links = code_links or []
+
+        for skill in skills:
+            # Create skill directory
+            skill_dir = SKILLS_DRAFTS_DIR / skill.skill_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate CANDIDATE.md
+            candidate_content = self._generate_candidate_md(skill, doc_id, title)
+            candidate_path = skill_dir / "CANDIDATE.md"
+            candidate_path.write_text(candidate_content)
+
+            # Generate evidence.json
+            evidence = self._generate_evidence_json(skill, doc_id, code_links)
+            evidence_path = skill_dir / "evidence.json"
+            evidence_path.write_text(json.dumps(evidence, indent=2))
+
+            created_paths.append(skill_dir)
+            logger.info(f"Wrote draft skill to {skill_dir}")
+
+        return created_paths
+
+    def _generate_candidate_md(
+        self,
+        skill: ExtractedSkill,
+        doc_id: str,
+        title: str
+    ) -> str:
+        """Generate CANDIDATE.md content for a skill draft."""
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # Build steps section
+        steps_md = ""
+        if skill.steps:
+            for i, step in enumerate(skill.steps, 1):
+                step_desc = step.get('description', '') if isinstance(step, dict) else str(step)
+                step_code = step.get('code', '') if isinstance(step, dict) else ''
+                steps_md += f"\n### Step {i}: {step_desc[:50]}\n\n"
+                if step_code:
+                    steps_md += f"```python\n{step_code}\n```\n"
+
+        # Build parameters section
+        params_md = ""
+        if skill.parameters:
+            params_md = "\n## Parameters\n\n| Parameter | Default | Range | Guidance |\n|-----------|---------|-------|----------|\n"
+            for param in skill.parameters:
+                if isinstance(param, dict):
+                    name = param.get('name', '?')
+                    default = param.get('default', '?')
+                    range_val = param.get('range', '?')
+                    guidance = param.get('guidance', '')
+                    params_md += f"| {name} | {default} | {range_val} | {guidance} |\n"
+
+        # Build failure modes section
+        failure_md = ""
+        if skill.failure_modes:
+            failure_md = "\n## Failure Modes\n\n"
+            for mode in skill.failure_modes:
+                failure_md += f"- {mode}\n"
+
+        # Build cross-domain section
+        cross_domain_md = ""
+        if skill.transferable_to or skill.abstract_principle:
+            cross_domain_md = "\n## Cross-Domain Potential\n\n"
+            if skill.abstract_principle:
+                cross_domain_md += f"**Abstract Principle:** {skill.abstract_principle}\n\n"
+            if skill.original_domain:
+                cross_domain_md += f"**Original Domain:** {skill.original_domain}\n\n"
+            if skill.transferable_to:
+                cross_domain_md += f"**Transferable To:** {', '.join(skill.transferable_to)}\n\n"
+            if skill.transfer_insights:
+                cross_domain_md += f"**Transfer Insight:** {skill.transfer_insights}\n"
+
+        content = f"""---
+name: {skill.skill_name}
+version: 0.1
+tier: LOW
+status: candidate
+domains: [{skill.original_domain or 'unknown'}]
+extracted_from: {doc_id}
+extracted_date: {today}
+confidence: {skill.confidence}
+---
+
+# {skill.skill_name.replace('-', ' ').title()}
+
+> **STATUS: CANDIDATE** - This skill was auto-extracted and needs validation.
+> Run `python scripts/promote_skill.py {skill.skill_name} --bootstrap` after adding an oracle test.
+
+## Source
+
+- **Paper:** {title}
+- **Document ID:** {doc_id}
+
+## Description
+
+{skill.description}
+
+## When to Use
+
+Use this skill when:
+- [Add specific trigger conditions after review]
+
+## When NOT to Use
+
+Do NOT use this skill when:
+- [Add exclusion conditions after review]
+
+## Prerequisites
+
+{chr(10).join(f'- {p}' for p in skill.prerequisites) if skill.prerequisites else '- [Add prerequisites]'}
+
+## Procedure
+{steps_md if steps_md else '''
+### Step 1: [First step]
+
+```python
+# Add implementation
+```
+'''}
+{params_md}
+{failure_md}
+{cross_domain_md}
+## Oracle (Verification Test)
+
+```python
+def test_skill():
+    \"\"\"
+    TODO: Implement oracle test.
+    This test MUST pass before the skill can be promoted.
+    \"\"\"
+    # Setup: Create minimal toy data
+    # test_data = ...
+
+    # Execute: Run the core skill operation
+    # result = skill_function(test_data)
+
+    # Verify: Check expected properties
+    # assert result is not None
+    # assert ...
+
+    raise NotImplementedError("Oracle test not yet implemented")
+
+if __name__ == "__main__":
+    test_skill()
+```
+
+## Evidence
+
+See `evidence.json` for source passages and code links.
+
+## Changelog
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 0.1 | {today} | Auto-extracted from paper |
+"""
+        return content
+
+    def _generate_evidence_json(
+        self,
+        skill: ExtractedSkill,
+        doc_id: str,
+        code_links: List[Dict]
+    ) -> Dict:
+        """Generate evidence.json for Gate 1 validation."""
+        return {
+            "skill_name": skill.skill_name,
+            "extracted_date": datetime.now().isoformat(),
+            "source_doc_id": doc_id,
+            "passages": [
+                {
+                    "passage_id": skill.source_passage_id,
+                    "relevance": 1.0,
+                    "role": "primary_source"
+                }
+            ],
+            "code_links": [
+                {
+                    "repo_url": link.get('repo_url', ''),
+                    "file_path": link.get('file_path', ''),
+                    "relevance": link.get('relevance', 0.8)
+                }
+                for link in code_links
+                if link.get('repo_url')
+            ],
+            "concepts": [],  # Will be populated if concepts are linked
+            "validation_status": {
+                "gate_1_evidence": len(code_links) > 0 or False,  # Will need 2+ passages
+                "gate_2_oracle": False,
+                "gate_3_dedup": None,
+                "gate_4_usage": False
+            }
+        }
+
+    async def extract_and_write_drafts(
+        self,
+        doc_id: str,
+        passages: List[Dict],
+        concepts: List[Dict],
+        title: str = "Unknown",
+        code_links: List[Dict] = None
+    ) -> List[Path]:
+        """
+        Extract skills and write to drafts directory (not database).
+
+        This is the recommended method for new skill extraction.
+        Skills are written to ~/.claude/skills_drafts/ only.
+
+        Args:
+            doc_id: Document ID
+            passages: List of passage dicts
+            concepts: List of concept dicts
+            title: Paper title
+            code_links: Optional code references
+
+        Returns:
+            List of paths to created skill draft directories
+        """
+        skills = await self.extract_from_passages(passages, concepts, title, doc_id)
+        return self.write_to_drafts(skills, doc_id, title, code_links)
 
 
 # ============================================================

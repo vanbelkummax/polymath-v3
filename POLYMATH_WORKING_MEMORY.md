@@ -20,6 +20,7 @@
 | **Skill Router Contract** | ✅ Done | `~/.claude/SKILL_ROUTER.md` |
 | **Promotion Script** | ✅ Done | `scripts/promote_skill.py` |
 | **SkillOps Schema** | ✅ Done | `scripts/migrations/003_skillops.sql` |
+| **SkillExtractor (drafts-only)** | ✅ Done | `lib/ingest/skill_extractor.py` |
 | **Skill Registry** | ⏳ Pending | `lib/skills/registry.py` |
 
 ### After SkillOps (Lower Priority)

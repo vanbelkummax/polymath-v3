@@ -106,18 +106,34 @@ class SkillPromoter:
         """List all draft skills."""
         if not DRAFTS_DIR.exists():
             return []
-        return [d.name for d in DRAFTS_DIR.iterdir() if d.is_dir() and (d / "SKILL.md").exists()]
+        drafts = []
+        for d in DRAFTS_DIR.iterdir():
+            if d.is_dir():
+                # Check for SKILL.md or CANDIDATE.md
+                if (d / "SKILL.md").exists() or (d / "CANDIDATE.md").exists():
+                    drafts.append(d.name)
+        return drafts
 
     def get_draft_path(self, skill_name: str) -> Optional[Path]:
         """Get path to draft skill directory."""
         draft_path = DRAFTS_DIR / skill_name
-        if draft_path.exists() and (draft_path / "SKILL.md").exists():
+        if draft_path.exists() and ((draft_path / "SKILL.md").exists() or (draft_path / "CANDIDATE.md").exists()):
             return draft_path
         # Try kebab-case conversion
         kebab_name = skill_name.lower().replace(' ', '-').replace('_', '-')
         draft_path = DRAFTS_DIR / kebab_name
-        if draft_path.exists() and (draft_path / "SKILL.md").exists():
+        if draft_path.exists() and ((draft_path / "SKILL.md").exists() or (draft_path / "CANDIDATE.md").exists()):
             return draft_path
+        return None
+
+    def get_skill_file(self, skill_path: Path) -> Optional[Path]:
+        """Get the skill definition file (SKILL.md or CANDIDATE.md)."""
+        skill_md = skill_path / "SKILL.md"
+        if skill_md.exists():
+            return skill_md
+        candidate_md = skill_path / "CANDIDATE.md"
+        if candidate_md.exists():
+            return candidate_md
         return None
 
     def get_skill_from_db(self, skill_name: str) -> Optional[Dict]:
@@ -144,9 +160,9 @@ class SkillPromoter:
         return None
 
     def parse_skill_metadata(self, skill_path: Path) -> Dict:
-        """Parse SKILL.md frontmatter and extract metadata."""
-        skill_file = skill_path / "SKILL.md"
-        if not skill_file.exists():
+        """Parse SKILL.md or CANDIDATE.md frontmatter and extract metadata."""
+        skill_file = self.get_skill_file(skill_path)
+        if not skill_file or not skill_file.exists():
             return {}
 
         content = skill_file.read_text()
@@ -226,8 +242,9 @@ class SkillPromoter:
         if db_skill and db_skill.get('source_code_chunks'):
             code_link_count = max(code_link_count, len(db_skill['source_code_chunks']))
 
-        # Check Provenance/Code section in SKILL.md
-        skill_content = (skill_path / "SKILL.md").read_text()
+        # Check Provenance/Code section in skill file
+        skill_file = self.get_skill_file(skill_path)
+        skill_content = skill_file.read_text() if skill_file else ""
         code_section_match = re.search(r'### Code\n(.*?)(?=\n###|\n##|\Z)', skill_content, re.DOTALL)
         if code_section_match:
             code_refs = re.findall(r'`[^`]+\.py:[^`]+`|github\.com/\S+', code_section_match.group(1))
@@ -365,7 +382,14 @@ if __name__ == "__main__":
             )
 
         # Get skill description for embedding
-        skill_file = skill_path / "SKILL.md"
+        skill_file = self.get_skill_file(skill_path)
+        if not skill_file:
+            return GateResult(
+                passed=True,
+                gate_name="Dedup",
+                message="No skill file found - skipping dedup check.",
+                details={'skipped': True}
+            )
         content = skill_file.read_text()
 
         # Extract description (after first ## heading)
@@ -592,6 +616,13 @@ if __name__ == "__main__":
             if promoted_path.exists():
                 shutil.rmtree(promoted_path)
             shutil.copytree(draft_path, promoted_path)
+
+            # Rename CANDIDATE.md to SKILL.md if needed
+            candidate_file = promoted_path / "CANDIDATE.md"
+            skill_file = promoted_path / "SKILL.md"
+            if candidate_file.exists() and not skill_file.exists():
+                candidate_file.rename(skill_file)
+                logger.info(f"  Renamed CANDIDATE.md -> SKILL.md")
 
             # Update database status
             db_skill = self.get_skill_from_db(skill_name)

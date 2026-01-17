@@ -21,7 +21,7 @@ cat POLYMATH_WORKING_MEMORY.md
 
 ## What's Been Completed
 
-### SkillOps (Tasks 1-5 of 6)
+### SkillOps (COMPLETE - 6/6 Tasks)
 
 | Task | Status | Location |
 |------|--------|----------|
@@ -30,7 +30,7 @@ cat POLYMATH_WORKING_MEMORY.md
 | Skill Router contract | ✅ Done | `~/.claude/SKILL_ROUTER.md` |
 | Promotion script | ✅ Done | `scripts/promote_skill.py` |
 | SkillOps schema | ✅ Done | `scripts/migrations/003_skillops.sql` |
-| Update SkillExtractor | ⏳ Next | `lib/ingest/skill_extractor.py` |
+| SkillExtractor (drafts-only) | ✅ Done | `lib/ingest/skill_extractor.py` |
 
 ### Earlier Work (All Complete)
 
@@ -43,35 +43,24 @@ cat POLYMATH_WORKING_MEMORY.md
 
 ---
 
-## Current Task: Update SkillExtractor
+## Current Task: Resume Original Roadmap
 
-Modify `lib/ingest/skill_extractor.py` to:
+SkillOps layer is COMPLETE. Continue with knowledge graph and analysis components:
 
-1. **Write to drafts only** - Output to `~/.claude/skills_drafts/` not `skills/`
-2. **Generate CANDIDATE.md** - Minimal skill template, not full SKILL.md
-3. **Generate evidence.json** - Track passage IDs and code links for Gate 1
+### Next Priority: Neo4j Full Sync
+Extend `lib/db/neo4j_sync.py` to sync:
+- All passages with embeddings
+- Skills and skill bridges
+- Cross-domain transfer relationships
 
-### CANDIDATE.md Format
-```markdown
----
-name: skill-name
-status: candidate
-extracted_from: doc_id
-confidence: 0.8
----
-# Skill Name
-[Description from LLM extraction]
-
-## Procedure
-[Steps extracted]
-
-## Evidence
-See evidence.json
-```
+### After That
+1. **BridgeAnalyzer** (`lib/analysis/bridge_analyzer.py`) - Cross-domain discovery
+2. **GapDetector** (`lib/analysis/gap_detector.py`) - Knowledge gap detection
+3. **End-to-end test** - Full pipeline from paper to promoted skill
 
 ---
 
-## Then Resume Original Roadmap
+## Resume Original Roadmap
 
 | Task | Priority |
 |------|----------|
@@ -118,6 +107,6 @@ Working directory: `/home/user/polymath-v3`
 ## Start Command
 
 ```
-Read POLYMATH_WORKING_MEMORY.md, then update lib/ingest/skill_extractor.py to write drafts only.
+Read POLYMATH_WORKING_MEMORY.md. SkillOps is complete - continue with Neo4j full sync or BridgeAnalyzer.
 Use TodoWrite to track progress.
 ```
